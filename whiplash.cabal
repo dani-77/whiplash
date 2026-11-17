@@ -46,6 +46,8 @@ library
     , wlroots-0.20
     , wayland-server
     , xkbcommon
+    , xcb
+    , xcb-icccm
 
 executable whiplash
   import:           shared

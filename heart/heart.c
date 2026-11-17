@@ -57,6 +57,8 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/edges.h>
 #include <wlr/util/log.h>
+#include <wlr/xwayland/xwayland.h>
+#include <wlr/xcursor.h>
 #include <xkbcommon/xkbcommon.h>
 
 #include "heart.h"
@@ -68,6 +70,7 @@ enum wh_scene_layer {
 	WH_LAYER_BOTTOM,
 	WH_LAYER_TILE,
 	WH_LAYER_FLOAT,
+	WH_LAYER_UNMANAGED, /* X11 menus and tooltips (override-redirect) */
 	WH_LAYER_TOP,
 	WH_LAYER_FULLSCREEN, /* above bars, below lock screens */
 	WH_LAYER_OVERLAY,
@@ -97,6 +100,11 @@ struct wh_server {
 
 	struct wlr_xdg_shell *xdg_shell;
 	struct wl_listener new_xdg_toplevel;
+
+	struct wlr_compositor *compositor;
+	struct wlr_xwayland *xwayland; /* NULL if XWayland could not start */
+	struct wl_listener xwayland_ready;
+	struct wl_listener xwayland_new_surface;
 	struct wl_listener new_xdg_popup;
 	struct wl_list views;
 
@@ -192,7 +200,10 @@ struct wh_view {
 	struct wh_server *server;
 	wh_view_id id;
 	bool mapped;
+	/* Exactly one of these is set: a Wayland (xdg) or an X11 window. */
 	struct wlr_xdg_toplevel *xdg_toplevel;
+	struct wlr_xwayland_surface *xsurface;
+	bool associated; /* X11: map/unmap listeners are attached */
 	/* container holds the four border rects and the surface tree */
 	struct wlr_scene_tree *container;
 	struct wlr_scene_tree *surface_tree;
@@ -205,6 +216,25 @@ struct wh_view {
 	struct wl_listener destroy;
 	struct wl_listener request_maximize;
 	struct wl_listener request_fullscreen;
+	/* X11 only */
+	struct wl_listener associate;
+	struct wl_listener dissociate;
+	struct wl_listener request_configure;
+	struct wl_listener request_activate;
+};
+
+/* An override-redirect X11 window (menu, tooltip, dropdown): placed where
+ * it asks, never managed or tiled. */
+struct wh_unmanaged {
+	struct wlr_xwayland_surface *xsurface;
+	struct wlr_scene_tree *tree;
+	bool associated;
+	struct wl_listener associate;
+	struct wl_listener dissociate;
+	struct wl_listener map;
+	struct wl_listener unmap;
+	struct wl_listener destroy;
+	struct wl_listener set_geometry;
 };
 
 /* Clients that support xdg-decoration are told to leave decorations to us:
@@ -318,6 +348,16 @@ static void view_paint_border(struct wh_view *view, bool focused) {
 static void view_apply_frame(struct wh_view *view) {
 	int bw = view_border(view);
 	int w = view->width, h = view->height;
+	if (w < 2 * bw || h < 2 * bw) {
+		/* Not placed yet (an X11 window maps before the brain sizes it). */
+		for (int i = 0; i < 4; i++) {
+			wlr_scene_rect_set_size(view->border[i], 0, 0);
+		}
+		if (view->surface_tree) {
+			wlr_scene_node_set_position(&view->surface_tree->node, bw, bw);
+		}
+		return;
+	}
 	wlr_scene_rect_set_size(view->border[0], w, bw);           /* top */
 	wlr_scene_node_set_position(&view->border[0]->node, 0, 0);
 	wlr_scene_rect_set_size(view->border[1], w, bw);           /* bottom */
@@ -326,7 +366,36 @@ static void view_apply_frame(struct wh_view *view) {
 	wlr_scene_node_set_position(&view->border[2]->node, 0, bw);
 	wlr_scene_rect_set_size(view->border[3], bw, h - 2 * bw);  /* right */
 	wlr_scene_node_set_position(&view->border[3]->node, w - bw, bw);
-	wlr_scene_node_set_position(&view->surface_tree->node, bw, bw);
+	if (view->surface_tree) {
+		wlr_scene_node_set_position(&view->surface_tree->node, bw, bw);
+	}
+}
+
+/* ---- per-kind view helpers (xdg or X11) --------------------------------- */
+
+static struct wlr_surface *view_surface(struct wh_view *view) {
+	return view->xsurface ? view->xsurface->surface : view->xdg_toplevel->base->surface;
+}
+
+static void view_set_activated(struct wh_view *view, bool on) {
+	if (view->xsurface) {
+		wlr_xwayland_surface_activate(view->xsurface, on);
+		if (on) {
+			wlr_xwayland_surface_restack(view->xsurface, NULL, XCB_STACK_MODE_ABOVE);
+		}
+	} else {
+		wlr_xdg_toplevel_set_activated(view->xdg_toplevel, on);
+	}
+}
+
+static struct wh_view *view_from_surface(struct wlr_surface *surface) {
+	struct wh_view *view;
+	wl_list_for_each(view, &server.views, link) {
+		if (view->mapped && view_surface(view) == surface) {
+			return view;
+		}
+	}
+	return NULL;
 }
 
 /* Any real input counts as activity for idle clients (swayidle). */
@@ -1244,6 +1313,230 @@ static void output_power_set_mode(struct wl_listener *listener, void *data) {
 	wlr_output_state_finish(&state);
 }
 
+/* ---- XWayland ----------------------------------------------------------- */
+
+static void x11_map(struct wl_listener *listener, void *data) {
+	struct wh_view *view = wl_container_of(listener, view, map);
+	view->surface_tree = wlr_scene_subsurface_tree_create(view->container,
+		view->xsurface->surface);
+	view_apply_frame(view);
+	view->mapped = true;
+	if (cb_view_mapped) {
+		cb_view_mapped(view->id);
+	}
+	if (view->xsurface->fullscreen && cb_view_fullscreen) {
+		cb_view_fullscreen(view->id, 1);
+	}
+}
+
+static void x11_unmap(struct wl_listener *listener, void *data) {
+	struct wh_view *view = wl_container_of(listener, view, unmap);
+	view->mapped = false;
+	if (server.grab_view == view) {
+		server.grab_view = NULL;
+		server.grab_mode = WH_GRAB_NONE;
+	}
+	if (cb_view_unmapped) {
+		cb_view_unmapped(view->id);
+	}
+	if (view->surface_tree) {
+		wlr_scene_node_destroy(&view->surface_tree->node);
+		view->surface_tree = NULL;
+	}
+}
+
+static void x11_associate(struct wl_listener *listener, void *data) {
+	struct wh_view *view = wl_container_of(listener, view, associate);
+	view->map.notify = x11_map;
+	wl_signal_add(&view->xsurface->surface->events.map, &view->map);
+	view->unmap.notify = x11_unmap;
+	wl_signal_add(&view->xsurface->surface->events.unmap, &view->unmap);
+	view->associated = true;
+}
+
+static void x11_dissociate(struct wl_listener *listener, void *data) {
+	struct wh_view *view = wl_container_of(listener, view, dissociate);
+	if (view->associated) {
+		wl_list_remove(&view->map.link);
+		wl_list_remove(&view->unmap.link);
+		view->associated = false;
+	}
+}
+
+static void x11_request_configure(struct wl_listener *listener, void *data) {
+	struct wh_view *view = wl_container_of(listener, view, request_configure);
+	struct wlr_xwayland_surface_configure_event *event = data;
+	if (!view->mapped) {
+		/* Not placed yet: let it have what it asks for. */
+		wlr_xwayland_surface_configure(view->xsurface, event->x, event->y,
+			event->width, event->height);
+		return;
+	}
+	if (view->mode == WH_VIEW_FLOATING) {
+		/* Floating windows may resize themselves; tell the brain. */
+		int bw = view_border(view);
+		view_place(view, view->x, view->y, event->width + 2 * bw,
+			event->height + 2 * bw);
+		if (cb_view_moved) {
+			cb_view_moved(view->id, view->x, view->y, view->width, view->height);
+		}
+	} else {
+		/* Tiled and fullscreen windows keep the brain's geometry. */
+		view_place(view, view->x, view->y, view->width, view->height);
+	}
+}
+
+static void x11_request_fullscreen(struct wl_listener *listener, void *data) {
+	struct wh_view *view = wl_container_of(listener, view, request_fullscreen);
+	if (view->mapped && cb_view_fullscreen) {
+		cb_view_fullscreen(view->id, view->xsurface->fullscreen);
+	}
+}
+
+static void x11_request_activate(struct wl_listener *listener, void *data) {
+	struct wh_view *view = wl_container_of(listener, view, request_activate);
+	if (view->mapped && cb_view_clicked) {
+		cb_view_clicked(view->id);
+	}
+}
+
+static void x11_destroy(struct wl_listener *listener, void *data) {
+	struct wh_view *view = wl_container_of(listener, view, destroy);
+	if (view->associated) {
+		wl_list_remove(&view->map.link);
+		wl_list_remove(&view->unmap.link);
+	}
+	wl_list_remove(&view->associate.link);
+	wl_list_remove(&view->dissociate.link);
+	wl_list_remove(&view->destroy.link);
+	wl_list_remove(&view->request_configure.link);
+	wl_list_remove(&view->request_fullscreen.link);
+	wl_list_remove(&view->request_activate.link);
+	wl_list_remove(&view->link);
+	if (server.grab_view == view) {
+		server.grab_view = NULL;
+		server.grab_mode = WH_GRAB_NONE;
+	}
+	wlr_scene_node_destroy(&view->container->node);
+	free(view);
+}
+
+static void unmanaged_map(struct wl_listener *listener, void *data) {
+	struct wh_unmanaged *u = wl_container_of(listener, u, map);
+	u->tree = wlr_scene_subsurface_tree_create(server.layers[WH_LAYER_UNMANAGED],
+		u->xsurface->surface);
+	wlr_scene_node_set_position(&u->tree->node, u->xsurface->x, u->xsurface->y);
+	if (!server.locked && wlr_xwayland_surface_override_redirect_wants_focus(u->xsurface)) {
+		keyboard_enter(u->xsurface->surface);
+	}
+}
+
+static void unmanaged_unmap(struct wl_listener *listener, void *data) {
+	struct wh_unmanaged *u = wl_container_of(listener, u, unmap);
+	if (server.seat->keyboard_state.focused_surface == u->xsurface->surface) {
+		restore_view_focus();
+	}
+	if (u->tree) {
+		wlr_scene_node_destroy(&u->tree->node);
+		u->tree = NULL;
+	}
+}
+
+static void unmanaged_set_geometry(struct wl_listener *listener, void *data) {
+	struct wh_unmanaged *u = wl_container_of(listener, u, set_geometry);
+	if (u->tree) {
+		wlr_scene_node_set_position(&u->tree->node, u->xsurface->x, u->xsurface->y);
+	}
+}
+
+static void unmanaged_associate(struct wl_listener *listener, void *data) {
+	struct wh_unmanaged *u = wl_container_of(listener, u, associate);
+	u->map.notify = unmanaged_map;
+	wl_signal_add(&u->xsurface->surface->events.map, &u->map);
+	u->unmap.notify = unmanaged_unmap;
+	wl_signal_add(&u->xsurface->surface->events.unmap, &u->unmap);
+	u->associated = true;
+}
+
+static void unmanaged_dissociate(struct wl_listener *listener, void *data) {
+	struct wh_unmanaged *u = wl_container_of(listener, u, dissociate);
+	if (u->associated) {
+		wl_list_remove(&u->map.link);
+		wl_list_remove(&u->unmap.link);
+		u->associated = false;
+	}
+}
+
+static void unmanaged_destroy(struct wl_listener *listener, void *data) {
+	struct wh_unmanaged *u = wl_container_of(listener, u, destroy);
+	if (u->associated) {
+		wl_list_remove(&u->map.link);
+		wl_list_remove(&u->unmap.link);
+	}
+	wl_list_remove(&u->associate.link);
+	wl_list_remove(&u->dissociate.link);
+	wl_list_remove(&u->destroy.link);
+	wl_list_remove(&u->set_geometry.link);
+	free(u);
+}
+
+static void xwayland_new_surface(struct wl_listener *listener, void *data) {
+	struct wlr_xwayland_surface *xs = data;
+	if (xs->override_redirect) {
+		struct wh_unmanaged *u = calloc(1, sizeof(*u));
+		u->xsurface = xs;
+		u->associate.notify = unmanaged_associate;
+		wl_signal_add(&xs->events.associate, &u->associate);
+		u->dissociate.notify = unmanaged_dissociate;
+		wl_signal_add(&xs->events.dissociate, &u->dissociate);
+		u->destroy.notify = unmanaged_destroy;
+		wl_signal_add(&xs->events.destroy, &u->destroy);
+		u->set_geometry.notify = unmanaged_set_geometry;
+		wl_signal_add(&xs->events.set_geometry, &u->set_geometry);
+		return;
+	}
+
+	struct wh_view *view = calloc(1, sizeof(*view));
+	view->server = &server;
+	view->id = ++server.next_id;
+	view->xsurface = xs;
+	view->container = wlr_scene_tree_create(server.layers[WH_LAYER_TILE]);
+	view->container->node.data = view;
+	for (int i = 0; i < 4; i++) {
+		view->border[i] = wlr_scene_rect_create(view->container, 0, 0,
+			server.border_normal);
+	}
+	/* The surface tree is created on map; hidden until the brain places it. */
+	wlr_scene_node_set_enabled(&view->container->node, false);
+	wl_list_insert(&server.views, &view->link);
+
+	view->associate.notify = x11_associate;
+	wl_signal_add(&xs->events.associate, &view->associate);
+	view->dissociate.notify = x11_dissociate;
+	wl_signal_add(&xs->events.dissociate, &view->dissociate);
+	view->destroy.notify = x11_destroy;
+	wl_signal_add(&xs->events.destroy, &view->destroy);
+	view->request_configure.notify = x11_request_configure;
+	wl_signal_add(&xs->events.request_configure, &view->request_configure);
+	view->request_fullscreen.notify = x11_request_fullscreen;
+	wl_signal_add(&xs->events.request_fullscreen, &view->request_fullscreen);
+	view->request_activate.notify = x11_request_activate;
+	wl_signal_add(&xs->events.request_activate, &view->request_activate);
+}
+
+static void xwayland_ready(struct wl_listener *listener, void *data) {
+	wlr_xwayland_set_seat(server.xwayland, server.seat);
+	/* X11 clients otherwise show no cursor (or X's black cross) at first. */
+	wlr_xcursor_manager_load(server.cursor_mgr, 1);
+	struct wlr_xcursor *xcursor =
+		wlr_xcursor_manager_get_xcursor(server.cursor_mgr, "default", 1);
+	if (xcursor) {
+		struct wlr_xcursor_image *image = xcursor->images[0];
+		wlr_xwayland_set_cursor(server.xwayland, wlr_xcursor_image_get_buffer(image),
+			image->hotspot_x, image->hotspot_y);
+	}
+}
+
 /* ---- session lock (ext-session-lock-v1) --------------------------------- */
 
 static void lock_surface_map(struct wl_listener *listener, void *data) {
@@ -1337,8 +1630,14 @@ static void view_place(struct wh_view *view, int x, int y, int width, int height
 	view->height = height;
 	wlr_scene_node_set_position(&view->container->node, x, y);
 	view_apply_frame(view);
-	wlr_xdg_toplevel_set_size(view->xdg_toplevel, width - 2 * bw,
-		height - 2 * bw);
+	if (view->xsurface) {
+		/* X11 clients need their absolute position (menus, drag-and-drop). */
+		wlr_xwayland_surface_configure(view->xsurface, x + bw, y + bw,
+			width - 2 * bw, height - 2 * bw);
+	} else {
+		wlr_xdg_toplevel_set_size(view->xdg_toplevel, width - 2 * bw,
+			height - 2 * bw);
+	}
 }
 
 void wh_view_set_geometry(wh_view_id id, int x, int y, int width, int height) {
@@ -1357,11 +1656,15 @@ void wh_view_set_mode(wh_view_id id, int mode) {
 	enum wh_scene_layer layer = mode == WH_VIEW_FLOATING ? WH_LAYER_FLOAT
 		: mode == WH_VIEW_FULLSCREEN ? WH_LAYER_FULLSCREEN : WH_LAYER_TILE;
 	wlr_scene_node_reparent(&view->container->node, server.layers[layer]);
-	/* Tiled edges tell clients not to draw shadows or round corners. */
-	wlr_xdg_toplevel_set_tiled(view->xdg_toplevel, mode == WH_VIEW_TILED
-		? WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT
-		: WLR_EDGE_NONE);
-	wlr_xdg_toplevel_set_fullscreen(view->xdg_toplevel, mode == WH_VIEW_FULLSCREEN);
+	if (view->xsurface) {
+		wlr_xwayland_surface_set_fullscreen(view->xsurface, mode == WH_VIEW_FULLSCREEN);
+	} else {
+		/* Tiled edges tell clients not to draw shadows or round corners. */
+		wlr_xdg_toplevel_set_tiled(view->xdg_toplevel, mode == WH_VIEW_TILED
+			? WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT
+			: WLR_EDGE_NONE);
+		wlr_xdg_toplevel_set_fullscreen(view->xdg_toplevel, mode == WH_VIEW_FULLSCREEN);
+	}
 	if (server.grab_view == view) {
 		server.grab_view = NULL;
 		server.grab_mode = WH_GRAB_NONE;
@@ -1374,6 +1677,18 @@ int wh_view_wants_float(wh_view_id id) {
 		return 0;
 	}
 	/* Dialogs (windows with a parent) and fixed-size windows float. */
+	if (view->xsurface) {
+		struct wlr_xwayland_surface *xs = view->xsurface;
+		xcb_size_hints_t *hints = xs->size_hints;
+		return xs->modal || xs->parent != NULL ||
+			wlr_xwayland_surface_has_window_type(xs, WLR_XWAYLAND_NET_WM_WINDOW_TYPE_DIALOG) ||
+			wlr_xwayland_surface_has_window_type(xs, WLR_XWAYLAND_NET_WM_WINDOW_TYPE_UTILITY) ||
+			wlr_xwayland_surface_has_window_type(xs, WLR_XWAYLAND_NET_WM_WINDOW_TYPE_SPLASH) ||
+			wlr_xwayland_surface_has_window_type(xs, WLR_XWAYLAND_NET_WM_WINDOW_TYPE_TOOLBAR) ||
+			(hints && hints->min_width > 0 && hints->min_height > 0 &&
+			 hints->min_width == hints->max_width &&
+			 hints->min_height == hints->max_height);
+	}
 	struct wlr_xdg_toplevel *t = view->xdg_toplevel;
 	if (t->parent != NULL) {
 		return 1;
@@ -1385,12 +1700,14 @@ int wh_view_wants_float(wh_view_id id) {
 
 int wh_view_natural_width(wh_view_id id) {
 	struct wh_view *view = view_by_id(id);
-	return view ? view->xdg_toplevel->base->geometry.width : 0;
+	return !view ? 0 : view->xsurface ? view->xsurface->width
+		: view->xdg_toplevel->base->geometry.width;
 }
 
 int wh_view_natural_height(wh_view_id id) {
 	struct wh_view *view = view_by_id(id);
-	return view ? view->xdg_toplevel->base->geometry.height : 0;
+	return !view ? 0 : view->xsurface ? view->xsurface->height
+		: view->xdg_toplevel->base->geometry.height;
 }
 
 void wh_set_mouse_mod(uint32_t mods) {
@@ -1408,8 +1725,7 @@ void wh_view_focus(wh_view_id id) {
 	struct wlr_seat *seat = server.seat;
 	struct wlr_surface *prev = seat->keyboard_state.focused_surface;
 	struct wh_view *view = id ? view_by_id(id) : NULL;
-	struct wlr_surface *next =
-		view && view->mapped ? view->xdg_toplevel->base->surface : NULL;
+	struct wlr_surface *next = view && view->mapped ? view_surface(view) : NULL;
 
 	server.focused_view = id;
 	struct wh_view *other;
@@ -1430,10 +1746,9 @@ void wh_view_focus(wh_view_id id) {
 		return;
 	}
 	if (prev) {
-		struct wlr_xdg_toplevel *prev_toplevel =
-			wlr_xdg_toplevel_try_from_wlr_surface(prev);
-		if (prev_toplevel != NULL) {
-			wlr_xdg_toplevel_set_activated(prev_toplevel, false);
+		struct wh_view *prev_view = view_from_surface(prev);
+		if (prev_view) {
+			view_set_activated(prev_view, false);
 		}
 	}
 	if (!next) {
@@ -1441,7 +1756,7 @@ void wh_view_focus(wh_view_id id) {
 		return;
 	}
 	wlr_scene_node_raise_to_top(&view->container->node);
-	wlr_xdg_toplevel_set_activated(view->xdg_toplevel, true);
+	view_set_activated(view, true);
 	struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
 	if (keyboard != NULL) {
 		wlr_seat_keyboard_notify_enter(seat, next, keyboard->keycodes,
@@ -1451,7 +1766,9 @@ void wh_view_focus(wh_view_id id) {
 
 void wh_view_close(wh_view_id id) {
 	struct wh_view *view = view_by_id(id);
-	if (view) {
+	if (view && view->xsurface) {
+		wlr_xwayland_surface_close(view->xsurface);
+	} else if (view) {
 		wlr_xdg_toplevel_send_close(view->xdg_toplevel);
 	}
 }
@@ -1551,7 +1868,7 @@ int wh_init(void) {
 		return 1;
 	}
 
-	wlr_compositor_create(server.wl_display, 5, server.renderer);
+	server.compositor = wlr_compositor_create(server.wl_display, 5, server.renderer);
 	wlr_subcompositor_create(server.wl_display);
 	wlr_data_device_manager_create(server.wl_display);
 	/* Small protocols many clients take for granted (mpv needs viewporter);
@@ -1653,6 +1970,17 @@ int wh_init(void) {
 	server.pointer_focus_change.notify = seat_pointer_focus_change;
 	wl_signal_add(&server.seat->pointer_state.events.focus_change,
 		&server.pointer_focus_change);
+	/* Lazy: Xwayland only starts when the first X11 client connects. */
+	server.xwayland = wlr_xwayland_create(server.wl_display, server.compositor, true);
+	if (server.xwayland) {
+		server.xwayland_ready.notify = xwayland_ready;
+		wl_signal_add(&server.xwayland->events.ready, &server.xwayland_ready);
+		server.xwayland_new_surface.notify = xwayland_new_surface;
+		wl_signal_add(&server.xwayland->events.new_surface, &server.xwayland_new_surface);
+		setenv("DISPLAY", server.xwayland->display_name, true);
+	} else {
+		wlr_log(WLR_ERROR, "XWayland unavailable; X11 applications will not run");
+	}
 	server.request_set_primary_selection.notify = seat_request_set_primary_selection;
 	wl_signal_add(&server.seat->events.request_set_primary_selection,
 		&server.request_set_primary_selection);
@@ -1692,6 +2020,12 @@ void wh_quit(void) {
 }
 
 void wh_shutdown(void) {
+	if (server.xwayland) {
+		wl_list_remove(&server.xwayland_ready.link);
+		wl_list_remove(&server.xwayland_new_surface.link);
+		wlr_xwayland_destroy(server.xwayland);
+		server.xwayland = NULL;
+	}
 	wl_display_destroy_clients(server.wl_display);
 
 	wl_list_remove(&server.new_xdg_toplevel.link);

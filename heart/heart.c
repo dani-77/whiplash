@@ -31,6 +31,7 @@
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
+#include <wlr/types/wlr_virtual_keyboard_v1.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/edges.h>
@@ -69,6 +70,8 @@ struct wh_server {
 	struct wl_listener pointer_focus_change;
 	struct wl_listener request_set_selection;
 	struct wl_list keyboards;
+	struct wlr_virtual_keyboard_manager_v1 *virtual_keyboard_mgr;
+	struct wl_listener new_virtual_keyboard;
 
 	struct wlr_output_layout *output_layout;
 	struct wl_list outputs;
@@ -238,27 +241,31 @@ static void keyboard_handle_destroy(struct wl_listener *listener, void *data) {
 	free(keyboard);
 }
 
-static void server_new_keyboard(struct wlr_input_device *device) {
+/* Virtual keyboards (wtype, on-screen keyboards) bring their own keymap and
+ * repeat settings, so only physical ones get ours. */
+static void server_new_keyboard(struct wlr_input_device *device, bool is_virtual) {
 	struct wlr_keyboard *wlr_keyboard = wlr_keyboard_from_input_device(device);
 
 	struct wh_keyboard *keyboard = calloc(1, sizeof(*keyboard));
 	keyboard->server = &server;
 	keyboard->wlr_keyboard = wlr_keyboard;
 
-	struct xkb_rule_names names = { .layout = server.xkb_layout };
-	struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-	struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, &names,
-		XKB_KEYMAP_COMPILE_NO_FLAGS);
-	if (keymap == NULL) {
-		wlr_log(WLR_ERROR, "invalid xkb layout '%s', using defaults",
-			server.xkb_layout ? server.xkb_layout : "(none)");
-		keymap = xkb_keymap_new_from_names(context, NULL,
+	if (!is_virtual) {
+		struct xkb_rule_names names = { .layout = server.xkb_layout };
+		struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+		struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, &names,
 			XKB_KEYMAP_COMPILE_NO_FLAGS);
+		if (keymap == NULL) {
+			wlr_log(WLR_ERROR, "invalid xkb layout '%s', using defaults",
+				server.xkb_layout ? server.xkb_layout : "(none)");
+			keymap = xkb_keymap_new_from_names(context, NULL,
+				XKB_KEYMAP_COMPILE_NO_FLAGS);
+		}
+		wlr_keyboard_set_keymap(wlr_keyboard, keymap);
+		xkb_keymap_unref(keymap);
+		xkb_context_unref(context);
+		wlr_keyboard_set_repeat_info(wlr_keyboard, 25, 600);
 	}
-	wlr_keyboard_set_keymap(wlr_keyboard, keymap);
-	xkb_keymap_unref(keymap);
-	xkb_context_unref(context);
-	wlr_keyboard_set_repeat_info(wlr_keyboard, 25, 600);
 
 	keyboard->modifiers.notify = keyboard_handle_modifiers;
 	wl_signal_add(&wlr_keyboard->events.modifiers, &keyboard->modifiers);
@@ -275,7 +282,7 @@ static void server_new_input(struct wl_listener *listener, void *data) {
 	struct wlr_input_device *device = data;
 	switch (device->type) {
 	case WLR_INPUT_DEVICE_KEYBOARD:
-		server_new_keyboard(device);
+		server_new_keyboard(device, false);
 		break;
 	case WLR_INPUT_DEVICE_POINTER:
 		wlr_cursor_attach_input_device(server.cursor, device);
@@ -288,6 +295,13 @@ static void server_new_input(struct wl_listener *listener, void *data) {
 		caps |= WL_SEAT_CAPABILITY_KEYBOARD;
 	}
 	wlr_seat_set_capabilities(server.seat, caps);
+}
+
+static void server_new_virtual_keyboard(struct wl_listener *listener, void *data) {
+	struct wlr_virtual_keyboard_v1 *keyboard = data;
+	server_new_keyboard(&keyboard->keyboard.base, true);
+	wlr_seat_set_capabilities(server.seat,
+		WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD);
 }
 
 /* ---- seat and pointer --------------------------------------------------- */
@@ -791,6 +805,11 @@ int wh_init(const char *xkb_layout) {
 	server.new_input.notify = server_new_input;
 	wl_signal_add(&server.backend->events.new_input, &server.new_input);
 	server.seat = wlr_seat_create(server.wl_display, "seat0");
+	server.virtual_keyboard_mgr =
+		wlr_virtual_keyboard_manager_v1_create(server.wl_display);
+	server.new_virtual_keyboard.notify = server_new_virtual_keyboard;
+	wl_signal_add(&server.virtual_keyboard_mgr->events.new_virtual_keyboard,
+		&server.new_virtual_keyboard);
 	server.request_cursor.notify = seat_request_cursor;
 	wl_signal_add(&server.seat->events.request_set_cursor, &server.request_cursor);
 	server.pointer_focus_change.notify = seat_pointer_focus_change;
@@ -839,6 +858,7 @@ void wh_shutdown(void) {
 	wl_list_remove(&server.cursor_axis.link);
 	wl_list_remove(&server.cursor_frame.link);
 	wl_list_remove(&server.new_input.link);
+	wl_list_remove(&server.new_virtual_keyboard.link);
 	wl_list_remove(&server.request_cursor.link);
 	wl_list_remove(&server.pointer_focus_change.link);
 	wl_list_remove(&server.request_set_selection.link);

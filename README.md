@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo/whiplash-256.png" width="160" alt="whiplash logo"></p>
+
 <h1 align="center">whiplash</h1>
 
 <p align="center">A tiling Wayland compositor for Linux, in the spirit of <a href="https://xmonad.org/">xmonad</a> —

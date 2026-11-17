@@ -1,3 +1,5 @@
+<p align="center"><img src="../assets/logo/whiplash-192.png" width="96" alt="whiplash logo"></p>
+
 # whiplash (developer notes)
 
 This is the technical README: architecture, the C/Haskell boundary, how to build and

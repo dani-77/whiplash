@@ -20,6 +20,8 @@ PROTOCOL_HEADERS = \
 	heart/wlr-layer-shell-unstable-v1-protocol.h \
 	heart/wlr-output-power-management-unstable-v1-protocol.h
 
+ICON_SIZES = 16 32 48 64 128 192 256 512
+
 SOURCES = whiplash.cabal app/Main.hs heart/heart.c heart/heart.h \
 	src/Whiplash.hs $(wildcard src/Whiplash/*.hs)
 
@@ -60,6 +62,10 @@ install: build/whiplash
 	install -Dm644 data/whiplash.desktop $(DESTDIR)$(PREFIX)/share/wayland-sessions/whiplash.desktop
 	install -Dm644 data/whiplash-portals.conf $(DESTDIR)/etc/xdg-desktop-portal/whiplash-portals.conf
 	install -Dm644 examples/config.toml $(DESTDIR)$(PREFIX)/share/whiplash/config.toml
+	for s in $(ICON_SIZES); do \
+		install -Dm644 assets/logo/whiplash-$$s.png \
+			$(DESTDIR)$(PREFIX)/share/icons/hicolor/$${s}x$$s/apps/whiplash.png; \
+	done
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/whiplash
@@ -67,6 +73,9 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/wayland-sessions/whiplash.desktop
 	rm -f $(DESTDIR)/etc/xdg-desktop-portal/whiplash-portals.conf
 	rm -f $(DESTDIR)$(PREFIX)/share/whiplash/config.toml
+	for s in $(ICON_SIZES); do \
+		rm -f $(DESTDIR)$(PREFIX)/share/icons/hicolor/$${s}x$$s/apps/whiplash.png; \
+	done
 
 clean:
 	cabal clean

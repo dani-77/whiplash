@@ -2,7 +2,8 @@
 -- Haskell program: copy this file, change what you like, rebuild.
 --
 -- Keys follow the wasp config: Alt drives window management, Super opens
--- the d77 desktop pieces (Utumno through qsd77, d77run).
+-- the d77 desktop pieces (Utumno through qsd77, d77run). Alt+left drag
+-- moves a window (floating it), Alt+right drag resizes it.
 module Main (main) where
 
 import Whiplash
@@ -76,6 +77,8 @@ d77Keys cfg =
   , ((m, xK 'w'), jumpToLayout "Wide")
   , ((m, xK 'm'), jumpToLayout "Full")
   , ((m, xK_space), nextLayout)
+  , ((m .|. shiftMask, xK_space), toggleFloat)
+  , ((m, xK 'e'), toggleFullscreen)
   , -- Session
     ((m .|. shiftMask, xK 'c'), kill)
   , ((m .|. shiftMask, xK 'q'), quit)

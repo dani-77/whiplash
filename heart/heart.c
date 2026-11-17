@@ -14,6 +14,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <linux/input-event-codes.h>
 #include <sys/wait.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
@@ -50,7 +51,9 @@ enum wh_scene_layer {
 	WH_LAYER_BACKGROUND,
 	WH_LAYER_BOTTOM,
 	WH_LAYER_TILE,
+	WH_LAYER_FLOAT,
 	WH_LAYER_TOP,
+	WH_LAYER_FULLSCREEN, /* above bars, below lock screens */
 	WH_LAYER_OVERLAY,
 	WH_LAYER_COUNT,
 };
@@ -90,6 +93,13 @@ struct wh_server {
 	struct wl_listener cursor_button;
 	struct wl_listener cursor_axis;
 	struct wl_listener cursor_frame;
+
+	/* Interactive move/resize of a view with mouse_mod + drag. */
+	uint32_t mouse_mod;
+	struct wh_view *grab_view;
+	enum { WH_GRAB_NONE, WH_GRAB_MOVE, WH_GRAB_RESIZE } grab_mode;
+	double grab_cursor_x, grab_cursor_y;
+	int grab_x, grab_y, grab_w, grab_h;
 
 	struct wlr_seat *seat;
 	struct wl_listener new_input;
@@ -132,7 +142,8 @@ struct wh_view {
 	struct wlr_scene_tree *container;
 	struct wlr_scene_tree *surface_tree;
 	struct wlr_scene_rect *border[4];
-	int width, height;
+	int x, y, width, height;
+	enum wh_view_mode mode;
 	struct wl_listener map;
 	struct wl_listener unmap;
 	struct wl_listener commit;
@@ -182,12 +193,24 @@ static wh_view_cb cb_view_unmapped;
 static wh_view_cb cb_view_clicked;
 static wh_key_cb cb_key;
 static wh_output_cb cb_output;
+static wh_view_state_cb cb_view_fullscreen;
+static wh_view_rect_cb cb_view_grab;
+static wh_view_rect_cb cb_view_moved;
 
 void wh_on_view_mapped(wh_view_cb cb) { cb_view_mapped = cb; }
 void wh_on_view_unmapped(wh_view_cb cb) { cb_view_unmapped = cb; }
 void wh_on_view_clicked(wh_view_cb cb) { cb_view_clicked = cb; }
 void wh_on_key(wh_key_cb cb) { cb_key = cb; }
 void wh_on_output(wh_output_cb cb) { cb_output = cb; }
+void wh_on_view_fullscreen(wh_view_state_cb cb) { cb_view_fullscreen = cb; }
+void wh_on_view_grab(wh_view_rect_cb cb) { cb_view_grab = cb; }
+void wh_on_view_moved(wh_view_rect_cb cb) { cb_view_moved = cb; }
+
+static void view_place(struct wh_view *view, int x, int y, int width, int height);
+
+static int view_border(struct wh_view *view) {
+	return view->mode == WH_VIEW_FULLSCREEN ? 0 : server.border_width;
+}
 
 static struct wh_view *view_by_id(wh_view_id id) {
 	struct wh_view *view;
@@ -215,7 +238,7 @@ static void view_paint_border(struct wh_view *view, bool focused) {
 
 /* Lay the border rects and the surface out inside a width x height frame. */
 static void view_apply_frame(struct wh_view *view) {
-	int bw = server.border_width;
+	int bw = view_border(view);
 	int w = view->width, h = view->height;
 	wlr_scene_rect_set_size(view->border[0], w, bw);           /* top */
 	wlr_scene_node_set_position(&view->border[0]->node, 0, 0);
@@ -426,7 +449,34 @@ static void focus_layer(struct wlr_layer_surface_v1 *layer_surface) {
 	keyboard_enter(layer_surface->surface);
 }
 
+static void process_grab(void) {
+	struct wh_view *view = server.grab_view;
+	int dx = (int)(server.cursor->x - server.grab_cursor_x);
+	int dy = (int)(server.cursor->y - server.grab_cursor_y);
+	if (server.grab_mode == WH_GRAB_MOVE) {
+		view_place(view, server.grab_x + dx, server.grab_y + dy,
+			server.grab_w, server.grab_h);
+	} else {
+		int w = server.grab_w + dx, h = server.grab_h + dy;
+		view_place(view, server.grab_x, server.grab_y,
+			w < 64 ? 64 : w, h < 48 ? 48 : h);
+	}
+}
+
+static void end_grab(void) {
+	struct wh_view *view = server.grab_view;
+	server.grab_view = NULL;
+	server.grab_mode = WH_GRAB_NONE;
+	if (view && cb_view_moved) {
+		cb_view_moved(view->id, view->x, view->y, view->width, view->height);
+	}
+}
+
 static void process_cursor_motion(uint32_t time) {
+	if (server.grab_view) {
+		process_grab();
+		return;
+	}
 	double sx, sy;
 	struct wlr_surface *surface = NULL;
 	struct wh_view *view = view_at(server.cursor->x, server.cursor->y,
@@ -456,8 +506,50 @@ static void server_cursor_motion_absolute(struct wl_listener *listener, void *da
 	process_cursor_motion(event->time_msec);
 }
 
+/* mouse_mod + left drag moves a view, + right drag resizes it. The brain
+ * is told first (it floats tiled views) and gets the final rect at the end. */
+static bool try_begin_grab(struct wlr_pointer_button_event *event) {
+	struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(server.seat);
+	if (!server.mouse_mod || !keyboard ||
+			(wlr_keyboard_get_modifiers(keyboard) & server.mouse_mod) != server.mouse_mod ||
+			(event->button != BTN_LEFT && event->button != BTN_RIGHT)) {
+		return false;
+	}
+	double sx, sy;
+	struct wlr_surface *surface = NULL;
+	struct wh_view *view = view_at(server.cursor->x, server.cursor->y,
+		&surface, &sx, &sy);
+	if (!view || view->mode == WH_VIEW_FULLSCREEN) {
+		return false;
+	}
+	if (cb_view_grab) {
+		cb_view_grab(view->id, view->x, view->y, view->width, view->height);
+	}
+	if (view->mode != WH_VIEW_FLOATING) {
+		return true; /* the brain declined to float it */
+	}
+	server.grab_view = view;
+	server.grab_mode = event->button == BTN_LEFT ? WH_GRAB_MOVE : WH_GRAB_RESIZE;
+	server.grab_cursor_x = server.cursor->x;
+	server.grab_cursor_y = server.cursor->y;
+	server.grab_x = view->x;
+	server.grab_y = view->y;
+	server.grab_w = view->width;
+	server.grab_h = view->height;
+	return true;
+}
+
 static void server_cursor_button(struct wl_listener *listener, void *data) {
 	struct wlr_pointer_button_event *event = data;
+	if (server.grab_view) {
+		if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+			end_grab();
+		}
+		return;
+	}
+	if (event->state == WL_POINTER_BUTTON_STATE_PRESSED && try_begin_grab(event)) {
+		return;
+	}
 	wlr_seat_pointer_notify_button(server.seat, event->time_msec,
 		event->button, event->state);
 	if (event->state == WL_POINTER_BUTTON_STATE_PRESSED && cb_view_clicked) {
@@ -538,7 +630,8 @@ static void arrange_layers(void) {
 	}
 	server.usable = usable;
 	if (cb_output) {
-		cb_output(usable.x, usable.y, usable.width, usable.height);
+		cb_output(full.x, full.y, full.width, full.height,
+			usable.x, usable.y, usable.width, usable.height);
 	}
 }
 
@@ -611,11 +704,19 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 	if (cb_view_mapped) {
 		cb_view_mapped(view->id);
 	}
+	/* Clients that start fullscreen (mpv --fs, games) asked before mapping. */
+	if (view->xdg_toplevel->requested.fullscreen && cb_view_fullscreen) {
+		cb_view_fullscreen(view->id, 1);
+	}
 }
 
 static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
 	struct wh_view *view = wl_container_of(listener, view, unmap);
 	view->mapped = false;
+	if (server.grab_view == view) {
+		server.grab_view = NULL;
+		server.grab_mode = WH_GRAB_NONE;
+	}
 	if (cb_view_unmapped) {
 		cb_view_unmapped(view->id);
 	}
@@ -655,6 +756,10 @@ static void xdg_toplevel_request_state(struct wl_listener *listener, void *data)
 
 static void xdg_toplevel_request_fullscreen(struct wl_listener *listener, void *data) {
 	struct wh_view *view = wl_container_of(listener, view, request_fullscreen);
+	if (view->mapped && cb_view_fullscreen) {
+		cb_view_fullscreen(view->id, view->xdg_toplevel->requested.fullscreen);
+	}
+	/* xdg-shell wants a configure in reply even when nothing changes. */
 	if (view->xdg_toplevel->base->initialized) {
 		wlr_xdg_surface_schedule_configure(view->xdg_toplevel->base);
 	}
@@ -878,21 +983,75 @@ static void server_new_layer_surface(struct wl_listener *listener, void *data) {
 
 /* ---- commands from the brain -------------------------------------------- */
 
-void wh_view_set_geometry(wh_view_id id, int x, int y, int width, int height) {
-	struct wh_view *view = view_by_id(id);
-	if (!view) {
-		return;
-	}
-	int bw = server.border_width;
+static void view_place(struct wh_view *view, int x, int y, int width, int height) {
+	int bw = view_border(view);
 	if (width <= 2 * bw || height <= 2 * bw) {
 		return;
 	}
+	view->x = x;
+	view->y = y;
 	view->width = width;
 	view->height = height;
 	wlr_scene_node_set_position(&view->container->node, x, y);
 	view_apply_frame(view);
 	wlr_xdg_toplevel_set_size(view->xdg_toplevel, width - 2 * bw,
 		height - 2 * bw);
+}
+
+void wh_view_set_geometry(wh_view_id id, int x, int y, int width, int height) {
+	struct wh_view *view = view_by_id(id);
+	if (view && view != server.grab_view) {
+		view_place(view, x, y, width, height);
+	}
+}
+
+void wh_view_set_mode(wh_view_id id, int mode) {
+	struct wh_view *view = view_by_id(id);
+	if (!view || (int)view->mode == mode) {
+		return;
+	}
+	view->mode = mode;
+	enum wh_scene_layer layer = mode == WH_VIEW_FLOATING ? WH_LAYER_FLOAT
+		: mode == WH_VIEW_FULLSCREEN ? WH_LAYER_FULLSCREEN : WH_LAYER_TILE;
+	wlr_scene_node_reparent(&view->container->node, server.layers[layer]);
+	/* Tiled edges tell clients not to draw shadows or round corners. */
+	wlr_xdg_toplevel_set_tiled(view->xdg_toplevel, mode == WH_VIEW_TILED
+		? WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT | WLR_EDGE_RIGHT
+		: WLR_EDGE_NONE);
+	wlr_xdg_toplevel_set_fullscreen(view->xdg_toplevel, mode == WH_VIEW_FULLSCREEN);
+	if (server.grab_view == view) {
+		server.grab_view = NULL;
+		server.grab_mode = WH_GRAB_NONE;
+	}
+}
+
+int wh_view_wants_float(wh_view_id id) {
+	struct wh_view *view = view_by_id(id);
+	if (!view) {
+		return 0;
+	}
+	/* Dialogs (windows with a parent) and fixed-size windows float. */
+	struct wlr_xdg_toplevel *t = view->xdg_toplevel;
+	if (t->parent != NULL) {
+		return 1;
+	}
+	return t->current.min_width > 0 && t->current.min_height > 0 &&
+		t->current.min_width == t->current.max_width &&
+		t->current.min_height == t->current.max_height;
+}
+
+int wh_view_natural_width(wh_view_id id) {
+	struct wh_view *view = view_by_id(id);
+	return view ? view->xdg_toplevel->base->geometry.width : 0;
+}
+
+int wh_view_natural_height(wh_view_id id) {
+	struct wh_view *view = view_by_id(id);
+	return view ? view->xdg_toplevel->base->geometry.height : 0;
+}
+
+void wh_set_mouse_mod(uint32_t mods) {
+	server.mouse_mod = mods;
 }
 
 void wh_view_set_visible(wh_view_id id, int visible) {

@@ -27,6 +27,7 @@ typedef void (*wh_output_cb)(int x, int y, int width, int height,
 typedef void (*wh_view_state_cb)(wh_view_id id, int on);
 typedef void (*wh_view_rect_cb)(wh_view_id id, int x, int y, int width, int height);
 typedef void (*wh_workspace_cb)(int tag);
+typedef void (*wh_void_cb)(void);
 
 enum wh_view_mode {
 	WH_VIEW_TILED = 0,
@@ -47,9 +48,11 @@ void wh_on_view_grab(wh_view_rect_cb cb);
 void wh_on_view_moved(wh_view_rect_cb cb);
 /* A bar asked to switch to this workspace (ext-workspace-v1). */
 void wh_on_workspace_activate(wh_workspace_cb cb);
+/* The watched config file was written (see wh_watch_config). */
+void wh_on_config_changed(wh_void_cb cb);
 
-/* Lifecycle. wh_init returns 0 on success. xkb_layout may be NULL. */
-int wh_init(const char *xkb_layout);
+/* Lifecycle. wh_init returns 0 on success. */
+int wh_init(void);
 const char *wh_socket(void);
 void wh_run(void);
 void wh_quit(void);
@@ -70,5 +73,14 @@ void wh_workspace_add(int tag, const char *name);
 void wh_workspace_set_active(int tag);
 void wh_set_border(int width, uint32_t focused_rgba, uint32_t normal_rgba);
 void wh_spawn(const char *command);
+/* Keyboard settings for physical keyboards; empty strings mean xkb
+ * defaults, non-positive repeat values mean 25 Hz / 600 ms. Can be called
+ * before wh_init and again at any time. */
+void wh_set_keyboard(const char *layout, const char *variant, const char *options,
+	int repeat_rate, int repeat_delay);
+/* XKB_KEY_NoSymbol (0) when the name is unknown. */
+uint32_t wh_keysym_from_name(const char *name);
+/* Watch dir/name for writes (after wh_init); 0 on success. */
+int wh_watch_config(const char *dir, const char *name);
 
 #endif

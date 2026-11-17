@@ -1,0 +1,121 @@
+# whiplash configuration
+#
+# Copy to ~/.config/whiplash/config.toml. whiplash reloads it every time it
+# is saved; if the file has an error, the previous config stays active and
+# the error shows up as a notification and in
+# ~/.local/state/whiplash/whiplash.log.
+#
+# Anything left out keeps its built-in default. The [keybinds] table, when
+# present, replaces the whole default set, so every active binding is listed
+# here.
+
+terminal = "alacritty"
+
+# Modifier that "Mod" stands for in [keybinds]: Alt, Super, Ctrl or Shift.
+# Mod + left drag moves a window, Mod + right drag resizes it.
+mod = "Alt"
+
+gaps = 4
+
+# Layouts in the order Mod+space cycles through: tall, wide, full.
+layouts = ["tall", "wide", "full"]
+
+# Number of workspaces (1-9). Changing it needs a restart.
+workspaces = 9
+
+border = { width = 2, focused = "#aa96da", normal = "#3b3b4f" }
+
+# Started once at login (not on reload). The same services as wasp, plus
+# the Utumno shell and swayidle: lock at 5 min, screen off at 5.5, lock
+# before sleep; a playing video holds all of this off.
+autostart = [
+  "awww-daemon",
+  "/usr/share/quickshell/utumno/wallpaper/set-wallpaper.sh",
+  "dunst",
+  "pipewire",
+  "pipewire-pulse",
+  "udiskie -a",
+  "brightnessctl set 50%",
+  "/usr/libexec/polkit-mate-authentication-agent-1",
+  "qsd77 run -c utumno",
+  "swayidle -w timeout 300 'qsd77 -c utumno locker' timeout 330 \"wlopm --off '*'\" resume \"wlopm --on '*'\" before-sleep 'qsd77 -c utumno locker'",
+]
+
+[keyboard]
+layout = "pt"
+variant = ""
+options = ""          # e.g. "caps:escape" or "grp:alt_shift_toggle"
+repeat_rate = 25      # repeats per second
+repeat_delay = 600    # ms before the first repeat
+
+# Actions: spawn <command>, close, quit, reload, focus-down, focus-up,
+# swap-down, swap-up, swap-master, workspace <n>, move-to-workspace <n>,
+# workspace-previous, layout <name>, next-layout, master-ratio <+/-step>,
+# toggle-float, fullscreen.
+#
+# Keys: a single character ("j", "1", ",") or an xkb key name ("Return",
+# "space", "Tab", "Print", "XF86AudioMute", ...). Modifiers: Mod, Alt, Super,
+# Ctrl, Shift.
+[keybinds]
+# Launchers
+"Mod+Shift+Return" = "spawn alacritty"
+"Mod+p" = "spawn wmenu-run"
+
+# D77 (Super)
+"Super+space" = "spawn qsd77 -c utumno launcher"
+"Super+a" = "spawn qsd77 -c utumno ollama"
+"Super+t" = "spawn qsd77 -c utumno locker"
+"Super+x" = "spawn qsd77 -c utumno session"
+"Super+y" = "spawn qsd77 -c utumno wallpaper"
+"Super+r" = "spawn d77run"
+
+# Media keys and screenshot
+"XF86AudioRaiseVolume" = "spawn amixer -q set Master 5%+"
+"XF86AudioLowerVolume" = "spawn amixer -q set Master 5%-"
+"XF86AudioMute" = "spawn amixer -q set Master toggle"
+"Print" = "spawn grim ~/screenshot-$(date +%Y%m%d-%H%M%S).png"
+
+# Window navigation
+"Mod+j" = "focus-down"
+"Mod+k" = "focus-up"
+"Mod+Tab" = "workspace-previous"
+"Mod+Return" = "swap-master"
+"Mod+Shift+j" = "swap-down"
+"Mod+Shift+k" = "swap-up"
+
+# Resize
+"Mod+h" = "master-ratio -0.05"
+"Mod+l" = "master-ratio +0.05"
+
+# Layouts and window state
+"Mod+t" = "layout tall"
+"Mod+w" = "layout wide"
+"Mod+m" = "layout full"
+"Mod+space" = "next-layout"
+"Mod+Shift+space" = "toggle-float"
+"Mod+e" = "fullscreen"
+
+# Session
+"Mod+Shift+c" = "close"
+"Mod+Shift+q" = "quit"
+"Mod+Shift+r" = "reload"
+
+# Workspaces
+"Mod+1" = "workspace 1"
+"Mod+2" = "workspace 2"
+"Mod+3" = "workspace 3"
+"Mod+4" = "workspace 4"
+"Mod+5" = "workspace 5"
+"Mod+6" = "workspace 6"
+"Mod+7" = "workspace 7"
+"Mod+8" = "workspace 8"
+"Mod+9" = "workspace 9"
+"Mod+Shift+1" = "move-to-workspace 1"
+"Mod+Shift+2" = "move-to-workspace 2"
+"Mod+Shift+3" = "move-to-workspace 3"
+"Mod+Shift+4" = "move-to-workspace 4"
+"Mod+Shift+5" = "move-to-workspace 5"
+"Mod+Shift+6" = "move-to-workspace 6"
+"Mod+Shift+7" = "move-to-workspace 7"
+"Mod+Shift+8" = "move-to-workspace 8"
+"Mod+Shift+9" = "move-to-workspace 9"

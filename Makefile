@@ -26,10 +26,12 @@ install: all
 	install -Dm755 $$(cabal list-bin --offline whiplash) $(DESTDIR)$(PREFIX)/bin/whiplash
 	install -Dm755 data/whiplash-session $(DESTDIR)$(PREFIX)/bin/whiplash-session
 	install -Dm644 data/whiplash.desktop $(DESTDIR)$(PREFIX)/share/wayland-sessions/whiplash.desktop
+	install -Dm644 data/config.toml $(DESTDIR)$(PREFIX)/share/whiplash/config.toml
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/whiplash $(DESTDIR)$(PREFIX)/bin/whiplash-session \
-		$(DESTDIR)$(PREFIX)/share/wayland-sessions/whiplash.desktop
+		$(DESTDIR)$(PREFIX)/share/wayland-sessions/whiplash.desktop \
+		$(DESTDIR)$(PREFIX)/share/whiplash/config.toml
 
 clean:
 	cabal clean

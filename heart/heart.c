@@ -16,6 +16,8 @@
 #include <unistd.h>
 #include <linux/input-event-codes.h>
 #include <sys/wait.h>
+#include <sys/inotify.h>
+#include <fcntl.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
 #include <wlr/backend/session.h>
@@ -160,7 +162,15 @@ struct wh_server {
 	struct wl_listener new_output;
 
 	const char *socket;
-	char *xkb_layout;
+	/* Keyboard settings for physical keyboards (wh_set_keyboard). */
+	char *xkb_layout, *xkb_variant, *xkb_options;
+	int repeat_rate, repeat_delay;
+
+	/* Config file watch (inotify on its directory, so editors that save
+	 * by renaming a temp file are seen too). */
+	int config_watch_fd;
+	char *config_name;
+	struct wl_event_source *config_watch_source;
 	wh_view_id next_id;
 
 	int border_width;
@@ -243,6 +253,7 @@ struct wh_keyboard {
 	struct wl_list link;
 	struct wh_server *server;
 	struct wlr_keyboard *wlr_keyboard;
+	bool is_virtual;
 	struct wl_listener modifiers;
 	struct wl_listener key;
 	struct wl_listener destroy;
@@ -259,6 +270,7 @@ static wh_view_state_cb cb_view_fullscreen;
 static wh_view_rect_cb cb_view_grab;
 static wh_view_rect_cb cb_view_moved;
 static wh_workspace_cb cb_workspace_activate;
+static wh_void_cb cb_config_changed;
 
 void wh_on_view_mapped(wh_view_cb cb) { cb_view_mapped = cb; }
 void wh_on_view_unmapped(wh_view_cb cb) { cb_view_unmapped = cb; }
@@ -269,6 +281,7 @@ void wh_on_view_fullscreen(wh_view_state_cb cb) { cb_view_fullscreen = cb; }
 void wh_on_view_grab(wh_view_rect_cb cb) { cb_view_grab = cb; }
 void wh_on_view_moved(wh_view_rect_cb cb) { cb_view_moved = cb; }
 void wh_on_workspace_activate(wh_workspace_cb cb) { cb_workspace_activate = cb; }
+void wh_on_config_changed(wh_void_cb cb) { cb_config_changed = cb; }
 
 static void view_place(struct wh_view *view, int x, int y, int width, int height);
 static void ensure_workspace_group(void);
@@ -391,6 +404,62 @@ static void keyboard_handle_destroy(struct wl_listener *listener, void *data) {
 	free(keyboard);
 }
 
+static void keyboard_apply_settings(struct wlr_keyboard *wlr_keyboard) {
+	struct xkb_rule_names names = {
+		.layout = server.xkb_layout,
+		.variant = server.xkb_variant,
+		.options = server.xkb_options,
+	};
+	struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+	struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, &names,
+		XKB_KEYMAP_COMPILE_NO_FLAGS);
+	if (keymap == NULL) {
+		wlr_log(WLR_ERROR, "invalid xkb settings (layout '%s'), using defaults",
+			server.xkb_layout ? server.xkb_layout : "(none)");
+		keymap = xkb_keymap_new_from_names(context, NULL,
+			XKB_KEYMAP_COMPILE_NO_FLAGS);
+	}
+	wlr_keyboard_set_keymap(wlr_keyboard, keymap);
+	xkb_keymap_unref(keymap);
+	xkb_context_unref(context);
+	wlr_keyboard_set_repeat_info(wlr_keyboard,
+		server.repeat_rate > 0 ? server.repeat_rate : 25,
+		server.repeat_delay > 0 ? server.repeat_delay : 600);
+}
+
+static char *dup_or_null(const char *s) {
+	return s && *s ? strdup(s) : NULL;
+}
+
+void wh_set_keyboard(const char *layout, const char *variant, const char *options,
+		int repeat_rate, int repeat_delay) {
+	free(server.xkb_layout);
+	free(server.xkb_variant);
+	free(server.xkb_options);
+	server.xkb_layout = dup_or_null(layout);
+	server.xkb_variant = dup_or_null(variant);
+	server.xkb_options = dup_or_null(options);
+	server.repeat_rate = repeat_rate;
+	server.repeat_delay = repeat_delay;
+	if (server.keyboards.next == NULL) {
+		return; /* before wh_init: applied as keyboards appear */
+	}
+	struct wh_keyboard *keyboard;
+	wl_list_for_each(keyboard, &server.keyboards, link) {
+		if (!keyboard->is_virtual) {
+			keyboard_apply_settings(keyboard->wlr_keyboard);
+		}
+	}
+}
+
+uint32_t wh_keysym_from_name(const char *name) {
+	xkb_keysym_t sym = xkb_keysym_from_name(name, XKB_KEYSYM_NO_FLAGS);
+	if (sym == XKB_KEY_NoSymbol) {
+		sym = xkb_keysym_from_name(name, XKB_KEYSYM_CASE_INSENSITIVE);
+	}
+	return sym;
+}
+
 /* Virtual keyboards (wtype, on-screen keyboards) bring their own keymap and
  * repeat settings, so only physical ones get ours. */
 static void server_new_keyboard(struct wlr_input_device *device, bool is_virtual) {
@@ -400,21 +469,9 @@ static void server_new_keyboard(struct wlr_input_device *device, bool is_virtual
 	keyboard->server = &server;
 	keyboard->wlr_keyboard = wlr_keyboard;
 
+	keyboard->is_virtual = is_virtual;
 	if (!is_virtual) {
-		struct xkb_rule_names names = { .layout = server.xkb_layout };
-		struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-		struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, &names,
-			XKB_KEYMAP_COMPILE_NO_FLAGS);
-		if (keymap == NULL) {
-			wlr_log(WLR_ERROR, "invalid xkb layout '%s', using defaults",
-				server.xkb_layout ? server.xkb_layout : "(none)");
-			keymap = xkb_keymap_new_from_names(context, NULL,
-				XKB_KEYMAP_COMPILE_NO_FLAGS);
-		}
-		wlr_keyboard_set_keymap(wlr_keyboard, keymap);
-		xkb_keymap_unref(keymap);
-		xkb_context_unref(context);
-		wlr_keyboard_set_repeat_info(wlr_keyboard, 25, 600);
+		keyboard_apply_settings(wlr_keyboard);
 	}
 
 	keyboard->modifiers.notify = keyboard_handle_modifiers;
@@ -1422,14 +1479,55 @@ void wh_spawn(const char *command) {
 	}
 }
 
+/* ---- config file watch ------------------------------------------------- */
+
+static int config_watch_ready(int fd, uint32_t mask, void *data) {
+	char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+	bool changed = false;
+	ssize_t len;
+	while ((len = read(fd, buf, sizeof(buf))) > 0) {
+		for (char *p = buf; p < buf + len;) {
+			struct inotify_event *event = (struct inotify_event *)p;
+			if (event->len && strcmp(event->name, server.config_name) == 0) {
+				changed = true;
+			}
+			p += sizeof(*event) + event->len;
+		}
+	}
+	if (changed && cb_config_changed) {
+		cb_config_changed();
+	}
+	return 0;
+}
+
+int wh_watch_config(const char *dir, const char *name) {
+	if (server.config_watch_source) {
+		return 0;
+	}
+	int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+	if (fd < 0) {
+		return -1;
+	}
+	if (inotify_add_watch(fd, dir, IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE) < 0) {
+		close(fd);
+		return -1;
+	}
+	server.config_watch_fd = fd;
+	free(server.config_name);
+	server.config_name = strdup(name);
+	server.config_watch_source = wl_event_loop_add_fd(
+		wl_display_get_event_loop(server.wl_display), fd, WL_EVENT_READABLE,
+		config_watch_ready, NULL);
+	return 0;
+}
+
 /* ---- lifecycle ---------------------------------------------------------- */
 
-int wh_init(const char *xkb_layout) {
+int wh_init(void) {
 	wlr_log_init(WLR_INFO, NULL);
 	wl_list_init(&server.views);
 	wl_list_init(&server.outputs);
 	wl_list_init(&server.keyboards);
-	server.xkb_layout = xkb_layout ? strdup(xkb_layout) : NULL;
 	if (server.border_width == 0 && server.border_focused[3] == 0) {
 		wh_set_border(2, 0xaa96daff, 0x444444ff);
 	}
@@ -1631,5 +1729,11 @@ void wh_shutdown(void) {
 	wlr_renderer_destroy(server.renderer);
 	wlr_backend_destroy(server.backend);
 	wl_display_destroy(server.wl_display);
+	if (server.config_watch_source) {
+		close(server.config_watch_fd);
+	}
+	free(server.config_name);
 	free(server.xkb_layout);
+	free(server.xkb_variant);
+	free(server.xkb_options);
 }

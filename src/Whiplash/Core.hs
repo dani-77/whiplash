@@ -1,40 +1,57 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
--- | The brain: configuration, the X monad that actions run in, and the
--- event handlers the heart calls into.
+-- | The brain: configuration, the X monad that actions run in, window
+-- placement, and the actions bindings call. The entry point that wires
+-- this to the heart lives in "Whiplash.Run".
 module Whiplash.Core
   ( Config (..)
+  , KeyboardSettings (..)
+  , KeyMap
   , X
+  , XEnv (..)
   , WState (..)
-  , whiplash
+  , runX
+  , getConfig
+  , getState
+  , modifyState
+  , refresh
   , windows
   , spawn
   , kill
   , quit
+  , reload
   , nextLayout
   , jumpToLayout
   , incRatio
   , toggleFloat
   , toggleFullscreen
+  , setFullscreen
+  , floatCentered
+  , forget
   , withFocused
   , io
   ) where
 
-import Control.Exception (SomeException, handle)
-import Control.Monad (forM_, unless)
+import Control.Monad (forM_, join)
 import Control.Monad.Reader (MonadIO, MonadReader, ReaderT, asks, liftIO, runReaderT)
+import Data.Char (toLower)
 import Data.IORef
 import Data.List ((\\))
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
-import System.Environment (getArgs)
-import System.Exit (exitFailure)
-import System.IO (hPutStrLn, stderr)
 
 import qualified Whiplash.Heart as H
 import Whiplash.Keys
 import Whiplash.Layout
 import qualified Whiplash.StackSet as W
+
+data KeyboardSettings = KeyboardSettings
+  { kbLayout :: String -- ^ xkb layout, e.g. "pt" or "pt,us"; "" for the default
+  , kbVariant :: String
+  , kbOptions :: String -- ^ e.g. "caps:escape,grp:alt_shift_toggle"
+  , kbRepeatRate :: Int -- ^ repeats per second
+  , kbRepeatDelay :: Int -- ^ ms held before the first repeat
+  }
 
 data Config = Config
   { terminal :: String
@@ -45,10 +62,12 @@ data Config = Config
   , gaps :: Int
   , layouts :: [Layout]
   , workspaceTags :: [Int]
-  , keyboardLayout :: Maybe String -- ^ xkb layout, e.g. Just "pt"
+  , keyboard :: KeyboardSettings
   , keys :: Config -> [((KeyMask, KeySym), X ())]
   , startupHook :: X ()
   }
+
+type KeyMap = M.Map (KeyMask, KeySym) (X ())
 
 data WState = WState
   { windowSet :: W.StackSet Int H.ViewId -- ^ layout index per workspace
@@ -59,7 +78,14 @@ data WState = WState
   , fullscreen :: S.Set H.ViewId
   }
 
-data XEnv = XEnv {xConfig :: Config, xState :: IORef WState}
+-- | The config can change at runtime (hot reload), so it lives in an
+-- IORef next to the key map built from it.
+data XEnv = XEnv
+  { xConfig :: IORef Config
+  , xKeyMap :: IORef KeyMap
+  , xState :: IORef WState
+  , xReload :: X () -- ^ re-read the config file (see "Whiplash.Run")
+  }
 
 newtype X a = X (ReaderT XEnv IO a)
   deriving (Functor, Applicative, Monad, MonadIO, MonadReader XEnv)
@@ -69,6 +95,9 @@ runX env (X m) = runReaderT m env
 
 io :: IO a -> X a
 io = liftIO
+
+getConfig :: X Config
+getConfig = asks xConfig >>= io . readIORef
 
 getState :: X WState
 getState = asks xState >>= io . readIORef
@@ -82,7 +111,7 @@ windows f = modifyState (\s -> s {windowSet = f (windowSet s)}) >> refresh
 
 refresh :: X ()
 refresh = do
-  cfg <- asks xConfig
+  cfg <- getConfig
   st <- getState
   let ws = windowSet st
       cur = W.currentWorkspace ws
@@ -90,7 +119,8 @@ refresh = do
       isFull v = S.member v (fullscreen st)
       floatRect v = M.lookup v (floating st)
       tiled = [v | v <- wins, not (isFull v), floatRect v == Nothing]
-      lay = layouts cfg !! (W.layoutIx cur `mod` length (layouts cfg))
+      lays = layouts cfg
+      lay = lays !! (W.layoutIx cur `mod` length lays)
       g = gaps cfg
       area = shrinkRect g (screen st)
       placed =
@@ -113,7 +143,7 @@ withFocused f = getState >>= maybe (pure ()) f . W.peek . windowSet
 -- | Float a window at the size it picked, centred on the usable area.
 floatCentered :: H.ViewId -> X ()
 floatCentered v = do
-  bw <- asks (borderWidth . xConfig)
+  bw <- borderWidth <$> getConfig
   st <- getState
   (nw, nh) <- io (H.naturalSize v)
   let Rect sx sy sw sh = screen st
@@ -150,19 +180,25 @@ spawn = io . H.spawnCommand
 
 -- | Politely ask the focused window to close.
 kill :: X ()
-kill = getState >>= maybe (pure ()) (io . H.closeView) . W.peek . windowSet
+kill = withFocused (io . H.closeView)
 
 quit :: X ()
 quit = io H.heartQuit
 
+-- | Re-read the config file now (it is also reloaded on every save).
+reload :: X ()
+reload = join (asks xReload)
+
 nextLayout :: X ()
 nextLayout = windows (W.modifyLayout (+ 1))
 
--- | Switch the current workspace to the layout with this name.
+-- | Switch the current workspace to the layout with this name
+-- (case-insensitive).
 jumpToLayout :: String -> X ()
 jumpToLayout name = do
-  ls <- asks (layouts . xConfig)
-  case lookup name (zip (map layoutName ls) [0 ..]) of
+  ls <- layouts <$> getConfig
+  let lower = map toLower
+  case lookup (lower name) (zip (map (lower . layoutName) ls) [0 ..]) of
     Just i -> windows (W.modifyLayout (const i))
     Nothing -> pure ()
 
@@ -170,68 +206,3 @@ incRatio :: Double -> X ()
 incRatio d = modifyState (\s -> s {ratio = clamp (ratio s + d)}) >> refresh
   where
     clamp = max 0.1 . min 0.9
-
--- | Exceptions must never cross back into C: log them and carry on.
-guarded :: String -> IO a -> a -> IO a
-guarded what act fallback = handle report act
-  where
-    report e = do
-      hPutStrLn stderr ("whiplash: " ++ what ++ ": " ++ show (e :: SomeException))
-      pure fallback
-
-whiplash :: Config -> IO ()
-whiplash cfg = do
-  args <- getArgs
-  -- -s CMD runs CMD after startup; -n skips the startupHook (handy for
-  -- nested or headless test runs that must not start session services).
-  let startupCmd = case dropWhile (/= "-s") args of
-        (_ : cmd : _) -> Just cmd
-        _ -> Nothing
-      skipHook = "-n" `elem` args
-  ref <- newIORef WState
-    { windowSet = W.new 0 (workspaceTags cfg)
-    , screen = Rect 0 0 1280 720
-    , fullRect = Rect 0 0 1280 720
-    , ratio = 0.55
-    , floating = M.empty
-    , fullscreen = S.empty
-    }
-  let env = XEnv cfg ref
-      run what act = guarded what (runX env act) ()
-      keymap = M.fromList (keys cfg cfg)
-
-  H.onViewMapped $ \v -> run "map" $ do
-    dialog <- io (H.wantsFloat v)
-    if dialog then floatCentered v else pure ()
-    windows (W.insertUp v)
-  H.onViewUnmapped $ \v -> run "unmap" (forget v >> windows (W.delete v))
-  H.onViewClicked $ \v -> run "click" (windows (W.focusWindow v))
-  H.onViewFullscreen $ \v on -> run "fullscreen" (setFullscreen v on)
-  -- Mod+drag on a tiled window floats it where it stands, like xmonad.
-  H.onViewGrab $ \v (x, y, w, h) -> run "grab" $ do
-    st <- getState
-    unless (M.member v (floating st) || S.member v (fullscreen st)) $
-      modifyState (\s -> s {floating = M.insert v (Rect x y w h) (floating s)})
-    windows (W.focusWindow v)
-  H.onViewMoved $ \v (x, y, w, h) -> run "moved" $
-    modifyState (\s -> s {floating = M.adjust (const (Rect x y w h)) v (floating s)})
-  H.onWorkspaceActivate $ \t -> run "workspace" (windows (W.view t))
-  H.onOutput $ \(x, y, w, h) (ux, uy, uw, uh) -> run "output" $ do
-    modifyState (\s -> s {fullRect = Rect x y w h, screen = Rect ux uy uw uh})
-    refresh
-  H.onKey $ \mods sym -> guarded "key" (lookupKey env keymap mods sym) False
-
-  H.setBorder (borderWidth cfg) (focusedBorderColor cfg) (normalBorderColor cfg)
-  H.setMouseMod (modMask cfg)
-  ok <- H.heartInit (keyboardLayout cfg)
-  unless ok $ hPutStrLn stderr "whiplash: the heart failed to start" >> exitFailure
-  forM_ (workspaceTags cfg) $ \t -> H.addWorkspace t (show t)
-  run "workspaces" refresh
-  unless skipHook $ run "startup" (startupHook cfg)
-  forM_ startupCmd H.spawnCommand
-  H.heartRun
-  H.heartShutdown
-  where
-    lookupKey env keymap mods sym = case M.lookup (mods, sym) keymap of
-      Just act -> runX env act >> pure True
-      Nothing -> pure False

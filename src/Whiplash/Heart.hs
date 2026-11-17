@@ -22,6 +22,10 @@ module Whiplash.Heart
   , onWorkspaceActivate
   , addWorkspace
   , setActiveWorkspace
+  , onConfigChanged
+  , setKeyboard
+  , keysymFromName
+  , watchConfig
   , heartInit
   , heartRun
   , heartQuit
@@ -37,7 +41,7 @@ module Whiplash.Heart
 import Data.Word (Word32)
 import Foreign.C.String (CString, withCString)
 import Foreign.C.Types (CInt (..))
-import Foreign.Ptr (FunPtr, nullPtr)
+import Foreign.Ptr (FunPtr)
 
 type ViewId = Word32
 
@@ -55,6 +59,7 @@ type COutputCb = CInt -> CInt -> CInt -> CInt -> CInt -> CInt -> CInt -> CInt ->
 type CStateCb = Word32 -> CInt -> IO ()
 type CRectCb = Word32 -> CInt -> CInt -> CInt -> CInt -> IO ()
 type CTagCb = CInt -> IO ()
+type CVoidCb = IO ()
 
 foreign import ccall "wrapper" mkViewCb :: CViewCb -> IO (FunPtr CViewCb)
 foreign import ccall "wrapper" mkKeyCb :: CKeyCb -> IO (FunPtr CKeyCb)
@@ -62,6 +67,7 @@ foreign import ccall "wrapper" mkOutputCb :: COutputCb -> IO (FunPtr COutputCb)
 foreign import ccall "wrapper" mkStateCb :: CStateCb -> IO (FunPtr CStateCb)
 foreign import ccall "wrapper" mkRectCb :: CRectCb -> IO (FunPtr CRectCb)
 foreign import ccall "wrapper" mkTagCb :: CTagCb -> IO (FunPtr CTagCb)
+foreign import ccall "wrapper" mkVoidCb :: CVoidCb -> IO (FunPtr CVoidCb)
 
 foreign import ccall unsafe "wh_on_view_mapped" c_on_view_mapped :: FunPtr CViewCb -> IO ()
 foreign import ccall unsafe "wh_on_view_unmapped" c_on_view_unmapped :: FunPtr CViewCb -> IO ()
@@ -79,9 +85,14 @@ foreign import ccall unsafe "wh_set_mouse_mod" c_set_mouse_mod :: Word32 -> IO (
 foreign import ccall unsafe "wh_on_workspace_activate" c_on_workspace_activate :: FunPtr CTagCb -> IO ()
 foreign import ccall unsafe "wh_workspace_add" c_workspace_add :: CInt -> CString -> IO ()
 foreign import ccall unsafe "wh_workspace_set_active" c_workspace_set_active :: CInt -> IO ()
+foreign import ccall unsafe "wh_on_config_changed" c_on_config_changed :: FunPtr CVoidCb -> IO ()
+foreign import ccall unsafe "wh_set_keyboard" c_set_keyboard
+  :: CString -> CString -> CString -> CInt -> CInt -> IO ()
+foreign import ccall unsafe "wh_keysym_from_name" c_keysym_from_name :: CString -> IO Word32
+foreign import ccall unsafe "wh_watch_config" c_watch_config :: CString -> CString -> IO CInt
 
 -- Calls that can re-enter Haskell through callbacks must be "safe".
-foreign import ccall safe "wh_init" c_init :: CString -> IO CInt
+foreign import ccall safe "wh_init" c_init :: IO CInt
 foreign import ccall safe "wh_run" c_run :: IO ()
 foreign import ccall safe "wh_shutdown" c_shutdown :: IO ()
 foreign import ccall safe "wh_spawn" c_spawn :: CString -> IO ()
@@ -149,8 +160,30 @@ setActiveWorkspace :: Int -> IO ()
 setActiveWorkspace = c_workspace_set_active . fromIntegral
 
 -- | Start the backend. Returns False when wlroots could not start.
-heartInit :: Maybe String -> IO Bool
-heartInit layout = (== 0) <$> maybe (c_init nullPtr) (`withCString` c_init) layout
+heartInit :: IO Bool
+heartInit = (== 0) <$> c_init
+
+-- | The watched config file was written.
+onConfigChanged :: IO () -> IO ()
+onConfigChanged f = mkVoidCb f >>= c_on_config_changed
+
+-- | Layout, variant, options, repeat rate (Hz) and delay (ms) for physical
+-- keyboards; applies at once to those already plugged in.
+setKeyboard :: String -> String -> String -> Int -> Int -> IO ()
+setKeyboard layout variant options rate delay =
+  withCString layout $ \l -> withCString variant $ \v -> withCString options $ \o ->
+    c_set_keyboard l v o (fromIntegral rate) (fromIntegral delay)
+
+-- | Look a key name up in xkbcommon ("Return", "XF86AudioMute", ...).
+keysymFromName :: String -> IO (Maybe Word32)
+keysymFromName name = do
+  sym <- withCString name c_keysym_from_name
+  pure (if sym == 0 then Nothing else Just sym)
+
+-- | Watch @dir/name@ for writes; False if inotify could not be set up.
+watchConfig :: FilePath -> String -> IO Bool
+watchConfig dir name =
+  withCString dir $ \d -> withCString name $ \n -> (== 0) <$> c_watch_config d n
 
 heartRun, heartQuit, heartShutdown :: IO ()
 heartRun = c_run

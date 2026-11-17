@@ -22,7 +22,7 @@ d77Config =
     , gaps = 4
     , layouts = [tall, wide, full]
     , workspaceTags = [1 .. 9]
-    , keyboardLayout = Just "pt"
+    , keyboard = KeyboardSettings "pt" "" "" 25 600
     , keys = d77Keys
     , startupHook = d77Autostart
     }

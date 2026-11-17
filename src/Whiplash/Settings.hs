@@ -46,7 +46,7 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain of
   where
     topKeys =
       [ "terminal", "mod", "gaps", "border", "layouts", "workspaces"
-      , "keyboard", "autostart", "keybinds", "outputs"
+      , "keyboard", "touchpad", "autostart", "keybinds", "outputs"
       ]
     plain cfg =
       pure cfg
@@ -57,6 +57,7 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain of
         >>= field "layouts" layoutList (\v c -> c {layouts = v})
         >>= field "workspaces" workspaces (\v c -> c {workspaceTags = v})
         >>= field "keyboard" (keyboardTable (keyboard cfg)) (\v c -> c {keyboard = v})
+        >>= field "touchpad" (touchpadTable (touchpad cfg)) (\v c -> c {touchpad = v})
         >>= field "autostart" (strList "autostart") (\v c -> c {startupHook = mapM_ spawn v})
         >>= field "outputs" outputTable (\v c -> c {outputRules = v})
     field :: String -> (Value -> Result a) -> (a -> Config -> Config) -> Config -> Result Config
@@ -89,6 +90,10 @@ checkKeys prefix allowed t a = case filter (`notElem` allowed) (M.keys t) of
 str :: Value -> Result String
 str (VString s) = Right s
 str v = Left ("expected a string, got " ++ typeName v)
+
+bool :: Value -> Result Bool
+bool (VBool b) = Right b
+bool v = Left ("expected true or false, got " ++ typeName v)
 
 nat :: String -> Value -> Result Int
 nat _ (VInt n) | n >= 0 && n < 100000 = Right (fromIntegral n)
@@ -149,6 +154,35 @@ keyboardTable kb (VTable k) = do
   d <- get "repeat_delay" (kbRepeatDelay kb) (nat "repeat_delay")
   Right (KeyboardSettings l v o r d)
 keyboardTable _ v = Left ("expected a table, got " ++ typeName v)
+
+touchpadTable :: TouchpadSettings -> Value -> Result TouchpadSettings
+touchpadTable tp (VTable t) = do
+  _ <- checkKeys "touchpad." known t ()
+  let get name def decode = maybe (Right def) (prefixed name . decode) (M.lookup name t)
+      prefixed name = either (Left . ((name ++ ": ") ++)) Right
+  tap <- get "tap" (tpTap tp) bool
+  drag <- get "tap_and_drag" (tpTapDrag tp) bool
+  dragLock <- get "drag_lock" (tpDragLock tp) bool
+  natural <- get "natural_scroll" (tpNaturalScroll tp) bool
+  dwt <- get "disable_while_typing" (tpDisableWhileTyping tp) bool
+  speed <- get "speed" (tpAccelSpeed tp) accelSpeed
+  profile <- get "accel_profile" (tpAccelProfile tp) $
+    choice [("default", AccelDefault), ("adaptive", AccelAdaptive), ("flat", AccelFlat)]
+  click <- get "click_method" (tpClickMethod tp) $
+    choice [("default", ClickDefault), ("button-areas", ClickButtonAreas), ("clickfinger", ClickFinger)]
+  Right (TouchpadSettings tap drag dragLock natural dwt speed profile click)
+  where
+    known =
+      [ "tap", "tap_and_drag", "drag_lock", "natural_scroll", "disable_while_typing"
+      , "speed", "accel_profile", "click_method"
+      ]
+    accelSpeed (VFloat d) | d >= -1 && d <= 1 = Right d
+    accelSpeed (VInt n) | n >= -1 && n <= 1 = Right (fromIntegral n)
+    accelSpeed v = Left ("expected a number from -1 to 1, got " ++ showValue v)
+    choice opts v = str v >>= \s -> case lookup (map toLower s) opts of
+      Just x -> Right x
+      Nothing -> Left ("expected one of " ++ intercalate ", " (map fst opts) ++ ", not " ++ show s)
+touchpadTable _ v = Left ("expected a table, got " ++ typeName v)
 
 -- | [outputs."eDP-1"] with scale = 1.5 and/or position = [x, y].
 outputTable :: Value -> Result [OutputRule]

@@ -57,6 +57,17 @@ options = ""          # e.g. "caps:escape" or "grp:alt_shift_toggle"
 repeat_rate = 25      # repeats per second
 repeat_delay = 600    # ms before the first repeat
 
+# Touchpads only; mice keep the libinput defaults.
+[touchpad]
+tap = true                    # tap to click: 1/2/3 fingers = left/right/middle
+tap_and_drag = true           # tap, then touch again and move to drag
+drag_lock = true              # a drag survives lifting the finger briefly
+natural_scroll = false
+disable_while_typing = true
+speed = 0.0                   # -1 (slow) .. 1 (fast)
+accel_profile = "default"     # default, adaptive or flat
+click_method = "default"      # default, button-areas or clickfinger
+
 # Actions: spawn <command>, close, quit, reload, focus-down, focus-up,
 # swap-down, swap-up, swap-master, workspace <n>, move-to-workspace <n>,
 # workspace-previous, layout <name>, next-layout, master-ratio <+/-step>,

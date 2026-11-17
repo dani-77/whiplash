@@ -27,6 +27,7 @@ module Whiplash.Heart
   , setActiveWorkspace
   , onConfigChanged
   , setKeyboard
+  , setTouchpad
   , keysymFromName
   , watchConfig
   , heartInit
@@ -43,7 +44,7 @@ module Whiplash.Heart
 
 import Data.Word (Word32)
 import Foreign.C.String (CString, peekCString, withCString)
-import Foreign.C.Types (CFloat (..), CInt (..))
+import Foreign.C.Types (CDouble (..), CFloat (..), CInt (..))
 import Foreign.Marshal.Array (allocaArray, peekArray)
 import Foreign.Ptr (FunPtr, Ptr, nullPtr)
 
@@ -102,6 +103,8 @@ foreign import ccall unsafe "wh_workspace_set_active" c_workspace_set_active :: 
 foreign import ccall unsafe "wh_on_config_changed" c_on_config_changed :: FunPtr CVoidCb -> IO ()
 foreign import ccall unsafe "wh_set_keyboard" c_set_keyboard
   :: CString -> CString -> CString -> CInt -> CInt -> IO ()
+foreign import ccall unsafe "wh_set_touchpad" c_set_touchpad
+  :: CInt -> CInt -> CInt -> CInt -> CInt -> CDouble -> CInt -> CInt -> IO ()
 foreign import ccall unsafe "wh_keysym_from_name" c_keysym_from_name :: CString -> IO Word32
 foreign import ccall unsafe "wh_watch_config" c_watch_config :: CString -> CString -> IO CInt
 
@@ -215,6 +218,17 @@ setKeyboard :: String -> String -> String -> Int -> Int -> IO ()
 setKeyboard layout variant options rate delay =
   withCString layout $ \l -> withCString variant $ \v -> withCString options $ \o ->
     c_set_keyboard l v o (fromIntegral rate) (fromIntegral delay)
+
+-- | Touchpad settings: tap, tap-and-drag, drag lock, natural scroll,
+-- disable while typing, pointer speed (-1..1), acceleration profile
+-- (0 default, 1 adaptive, 2 flat) and click method (0 default, 1 button
+-- areas, 2 clickfinger). Applies at once to touchpads already plugged in.
+setTouchpad :: Bool -> Bool -> Bool -> Bool -> Bool -> Double -> Int -> Int -> IO ()
+setTouchpad tap drag dragLock natural dwt speed profile click =
+  c_set_touchpad (flag tap) (flag drag) (flag dragLock) (flag natural) (flag dwt)
+    (realToFrac speed) (fromIntegral profile) (fromIntegral click)
+  where
+    flag b = if b then 1 else 0
 
 -- | Look a key name up in xkbcommon ("Return", "XF86AudioMute", ...).
 keysymFromName :: String -> IO (Maybe Word32)

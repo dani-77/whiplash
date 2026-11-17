@@ -62,6 +62,10 @@ applyToHeart cfg = do
   H.setOutputRules (outputRules cfg)
   let kb = keyboard cfg
   H.setKeyboard (kbLayout kb) (kbVariant kb) (kbOptions kb) (kbRepeatRate kb) (kbRepeatDelay kb)
+  let tp = touchpad cfg
+  H.setTouchpad (tpTap tp) (tpTapDrag tp) (tpDragLock tp) (tpNaturalScroll tp)
+    (tpDisableWhileTyping tp) (tpAccelSpeed tp)
+    (fromEnum (tpAccelProfile tp)) (fromEnum (tpClickMethod tp))
 
 keyMapOf :: Config -> KeyMap
 keyMapOf cfg = M.fromList (keys cfg cfg)

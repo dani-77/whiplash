@@ -163,6 +163,7 @@ struct wh_server {
 	struct wlr_cursor_shape_manager_v1 *cursor_shape_mgr;
 	struct wl_listener request_set_cursor_shape;
 	struct wl_list keyboards;
+	struct wl_list touchpads; /* struct wh_touchpad_dev, for hot reload */
 	struct wlr_virtual_keyboard_manager_v1 *virtual_keyboard_mgr;
 	struct wl_listener new_virtual_keyboard;
 	struct wlr_virtual_pointer_manager_v1 *virtual_pointer_mgr;
@@ -290,6 +291,20 @@ struct wh_output_rule {
 struct wh_popup {
 	struct wlr_xdg_popup *xdg_popup;
 	struct wl_listener commit;
+	struct wl_listener destroy;
+};
+
+/* Touchpad settings (wh_set_touchpad). Defaults match wasp, so a
+ * brain that never calls wh_set_touchpad still gets tap-to-click. */
+static struct {
+	int tap, tap_drag, drag_lock, natural_scroll, dwt;
+	double accel_speed;
+	int accel_profile, click_method;
+} touchpad_cfg = { 1, 1, 1, 0, 1, 0.0, WH_ACCEL_DEFAULT, WH_CLICK_DEFAULT };
+
+struct wh_touchpad_dev {
+	struct wl_list link;
+	struct libinput_device *device;
 	struct wl_listener destroy;
 };
 
@@ -568,25 +583,92 @@ static void server_new_keyboard(struct wlr_input_device *device, bool is_virtual
 	wl_list_insert(&server.keyboards, &keyboard->link);
 }
 
-/* Touchpads come out of libinput with tap-to-click off. Turn on the same
- * defaults as wasp: tap, tap-and-drag, drag lock, disable while typing. */
+/* libinput leaves tapping off on touchpads; the brain's [touchpad]
+ * settings (or the wasp defaults above) turn it on. */
+static void touchpad_apply(struct libinput_device *dev) {
+	if (libinput_device_config_tap_get_finger_count(dev) > 0) {
+		libinput_device_config_tap_set_enabled(dev, touchpad_cfg.tap
+			? LIBINPUT_CONFIG_TAP_ENABLED : LIBINPUT_CONFIG_TAP_DISABLED);
+		libinput_device_config_tap_set_button_map(dev, LIBINPUT_CONFIG_TAP_MAP_LRM);
+		libinput_device_config_tap_set_drag_enabled(dev, touchpad_cfg.tap_drag
+			? LIBINPUT_CONFIG_DRAG_ENABLED : LIBINPUT_CONFIG_DRAG_DISABLED);
+		libinput_device_config_tap_set_drag_lock_enabled(dev, touchpad_cfg.drag_lock
+			? LIBINPUT_CONFIG_DRAG_LOCK_ENABLED : LIBINPUT_CONFIG_DRAG_LOCK_DISABLED);
+	}
+	if (libinput_device_config_scroll_has_natural_scroll(dev)) {
+		libinput_device_config_scroll_set_natural_scroll_enabled(dev,
+			touchpad_cfg.natural_scroll);
+	}
+	if (libinput_device_config_dwt_is_available(dev)) {
+		libinput_device_config_dwt_set_enabled(dev, touchpad_cfg.dwt
+			? LIBINPUT_CONFIG_DWT_ENABLED : LIBINPUT_CONFIG_DWT_DISABLED);
+	}
+	if (libinput_device_config_accel_is_available(dev)) {
+		libinput_device_config_accel_set_speed(dev, touchpad_cfg.accel_speed);
+		enum libinput_config_accel_profile profile =
+			touchpad_cfg.accel_profile == WH_ACCEL_FLAT
+				? LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT
+			: touchpad_cfg.accel_profile == WH_ACCEL_ADAPTIVE
+				? LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE
+				: libinput_device_config_accel_get_default_profile(dev);
+		if (libinput_device_config_accel_get_profiles(dev) & profile) {
+			libinput_device_config_accel_set_profile(dev, profile);
+		}
+	}
+	uint32_t methods = libinput_device_config_click_get_methods(dev);
+	enum libinput_config_click_method method =
+		touchpad_cfg.click_method == WH_CLICK_BUTTON_AREAS
+			? LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS
+		: touchpad_cfg.click_method == WH_CLICK_CLICKFINGER
+			? LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER
+			: libinput_device_config_click_get_default_method(dev);
+	if (method == LIBINPUT_CONFIG_CLICK_METHOD_NONE || (methods & method)) {
+		libinput_device_config_click_set_method(dev, method);
+	}
+}
+
+static void touchpad_handle_destroy(struct wl_listener *listener, void *data) {
+	struct wh_touchpad_dev *tp = wl_container_of(listener, tp, destroy);
+	wl_list_remove(&tp->destroy.link);
+	wl_list_remove(&tp->link);
+	free(tp);
+}
+
+/* Only touchpads (devices that can tap) are configured; mice keep the
+ * libinput defaults. */
 static void configure_pointer(struct wlr_input_device *device) {
 	if (!wlr_input_device_is_libinput(device)) {
 		return;
 	}
 	struct libinput_device *dev = wlr_libinput_get_device_handle(device);
-	if (!dev) {
+	if (!dev || libinput_device_config_tap_get_finger_count(dev) == 0) {
 		return;
 	}
-	if (libinput_device_config_tap_get_finger_count(dev) > 0) {
-		libinput_device_config_tap_set_enabled(dev, LIBINPUT_CONFIG_TAP_ENABLED);
-		libinput_device_config_tap_set_button_map(dev, LIBINPUT_CONFIG_TAP_MAP_LRM);
-		libinput_device_config_tap_set_drag_enabled(dev, LIBINPUT_CONFIG_DRAG_ENABLED);
-		libinput_device_config_tap_set_drag_lock_enabled(dev,
-			LIBINPUT_CONFIG_DRAG_LOCK_ENABLED);
+	struct wh_touchpad_dev *tp = calloc(1, sizeof(*tp));
+	tp->device = dev;
+	tp->destroy.notify = touchpad_handle_destroy;
+	wl_signal_add(&device->events.destroy, &tp->destroy);
+	wl_list_insert(&server.touchpads, &tp->link);
+	touchpad_apply(dev);
+}
+
+void wh_set_touchpad(int tap, int tap_drag, int drag_lock, int natural_scroll,
+		int disable_while_typing, double accel_speed, int accel_profile,
+		int click_method) {
+	touchpad_cfg.tap = tap;
+	touchpad_cfg.tap_drag = tap_drag;
+	touchpad_cfg.drag_lock = drag_lock;
+	touchpad_cfg.natural_scroll = natural_scroll;
+	touchpad_cfg.dwt = disable_while_typing;
+	touchpad_cfg.accel_speed = accel_speed < -1 ? -1 : accel_speed > 1 ? 1 : accel_speed;
+	touchpad_cfg.accel_profile = accel_profile;
+	touchpad_cfg.click_method = click_method;
+	if (server.touchpads.next == NULL) {
+		return; /* before wh_init: applied as touchpads appear */
 	}
-	if (libinput_device_config_dwt_is_available(dev)) {
-		libinput_device_config_dwt_set_enabled(dev, LIBINPUT_CONFIG_DWT_ENABLED);
+	struct wh_touchpad_dev *tp;
+	wl_list_for_each(tp, &server.touchpads, link) {
+		touchpad_apply(tp->device);
 	}
 }
 
@@ -2024,6 +2106,7 @@ int wh_init(void) {
 	wl_list_init(&server.views);
 	wl_list_init(&server.outputs);
 	wl_list_init(&server.keyboards);
+	wl_list_init(&server.touchpads);
 	if (server.output_rules.next == NULL) {
 		wl_list_init(&server.output_rules);
 	}

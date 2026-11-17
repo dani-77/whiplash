@@ -23,6 +23,7 @@ d77Config =
     , layouts = [tall, wide, full]
     , workspaceTags = [1 .. 9]
     , keyboard = KeyboardSettings "pt" "" "" 25 600
+    , touchpad = defaultTouchpad -- tap to click, tap-and-drag, as in wasp
     , keys = d77Keys
     , startupHook = d77Autostart
     , outputRules = []

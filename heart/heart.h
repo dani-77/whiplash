@@ -86,6 +86,15 @@ void wh_output_rules_apply(void);
  * before wh_init and again at any time. */
 void wh_set_keyboard(const char *layout, const char *variant, const char *options,
 	int repeat_rate, int repeat_delay);
+/* Touchpad settings (devices that can tap; mice are left alone). Flags
+ * are 0/1, accel_speed is -1..1. Defaults: tap, tap-and-drag, drag lock
+ * and disable-while-typing on, the rest libinput's. Can be called before
+ * wh_init and again at any time. */
+enum wh_accel_profile { WH_ACCEL_DEFAULT, WH_ACCEL_ADAPTIVE, WH_ACCEL_FLAT };
+enum wh_click_method { WH_CLICK_DEFAULT, WH_CLICK_BUTTON_AREAS, WH_CLICK_CLICKFINGER };
+void wh_set_touchpad(int tap, int tap_drag, int drag_lock, int natural_scroll,
+	int disable_while_typing, double accel_speed, int accel_profile,
+	int click_method);
 /* XKB_KEY_NoSymbol (0) when the name is unknown. */
 uint32_t wh_keysym_from_name(const char *name);
 /* Watch dir/name for writes (after wh_init); 0 on success. */

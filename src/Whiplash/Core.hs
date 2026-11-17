@@ -5,6 +5,10 @@
 module Whiplash.Core
   ( Config (..)
   , KeyboardSettings (..)
+  , TouchpadSettings (..)
+  , AccelProfile (..)
+  , ClickMethod (..)
+  , defaultTouchpad
   , KeyMap
   , X
   , XEnv (..)
@@ -56,6 +60,30 @@ data KeyboardSettings = KeyboardSettings
   , kbRepeatDelay :: Int -- ^ ms held before the first repeat
   }
 
+-- | Settings for touchpads (devices that can tap); mice are left alone.
+data TouchpadSettings = TouchpadSettings
+  { tpTap :: Bool -- ^ tap to click: 1/2/3 fingers = left/right/middle
+  , tpTapDrag :: Bool -- ^ tap, then touch again and move to drag
+  , tpDragLock :: Bool -- ^ a drag survives lifting the finger briefly
+  , tpNaturalScroll :: Bool
+  , tpDisableWhileTyping :: Bool
+  , tpAccelSpeed :: Double -- ^ -1 (slow) .. 1 (fast)
+  , tpAccelProfile :: AccelProfile
+  , tpClickMethod :: ClickMethod
+  }
+
+data AccelProfile = AccelDefault | AccelAdaptive | AccelFlat
+  deriving (Eq, Show, Enum)
+
+-- | How a physical press picks the button: by where it lands on the pad
+-- (button areas) or by how many fingers touch (clickfinger).
+data ClickMethod = ClickDefault | ClickButtonAreas | ClickFinger
+  deriving (Eq, Show, Enum)
+
+-- | The wasp defaults.
+defaultTouchpad :: TouchpadSettings
+defaultTouchpad = TouchpadSettings True True True False True 0 AccelDefault ClickDefault
+
 data Config = Config
   { terminal :: String
   , modMask :: KeyMask
@@ -66,6 +94,7 @@ data Config = Config
   , layouts :: [Layout]
   , workspaceTags :: [Int]
   , keyboard :: KeyboardSettings
+  , touchpad :: TouchpadSettings
   , keys :: Config -> [((KeyMask, KeySym), X ())]
   , startupHook :: X ()
   , outputRules :: [OutputRule]

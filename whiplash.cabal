@@ -14,6 +14,8 @@ extra-source-files:
   heart/xdg-decoration-unstable-v1-protocol.h
   heart/wlr-layer-shell-unstable-v1-protocol.h
   protocols/wlr-layer-shell-unstable-v1.xml
+  heart/wlr-output-power-management-unstable-v1-protocol.h
+  protocols/wlr-output-power-management-unstable-v1.xml
 
 common shared
   default-language: Haskell2010

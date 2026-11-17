@@ -28,8 +28,6 @@ d77Config =
     }
 
 -- | Same session services as wasp's autostart, plus the Utumno shell.
--- swayidle/wlopm are left out until whiplash speaks ext-idle-notify and
--- output power management.
 d77Autostart :: X ()
 d77Autostart =
   mapM_
@@ -43,6 +41,12 @@ d77Autostart =
     , "brightnessctl set 50%"
     , "/usr/libexec/polkit-mate-authentication-agent-1"
     , "qsd77 run -c utumno"
+    , -- Idle: lock with Utumno after 5 minutes, screen off after 5.5 and
+      -- back on with any input, and lock before suspending. A playing
+      -- video (idle-inhibit) holds all of this off.
+      "swayidle -w timeout 300 'qsd77 -c utumno locker'"
+        ++ " timeout 330 \"wlopm --off '*'\" resume \"wlopm --on '*'\""
+        ++ " before-sleep 'qsd77 -c utumno locker'"
     ]
 
 d77Keys :: Config -> [((KeyMask, KeySym), X ())]

@@ -22,21 +22,32 @@
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_cursor.h>
+#include <wlr/types/wlr_cursor_shape_v1.h>
 #include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_ext_data_control_v1.h>
 #include <wlr/types/wlr_ext_workspace_v1.h>
+#include <wlr/types/wlr_fractional_scale_v1.h>
+#include <wlr/types/wlr_idle_inhibit_v1.h>
+#include <wlr/types/wlr_idle_notify_v1.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
+#include <wlr/types/wlr_output_power_management_v1.h>
 #include <wlr/types/wlr_pointer.h>
+#include <wlr/types/wlr_primary_selection.h>
+#include <wlr/types/wlr_primary_selection_v1.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_seat.h>
+#include <wlr/types/wlr_single_pixel_buffer_v1.h>
 #include <wlr/types/wlr_session_lock_v1.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
+#include <wlr/types/wlr_viewporter.h>
 #include <wlr/types/wlr_virtual_keyboard_v1.h>
 #include <wlr/types/wlr_virtual_pointer_v1.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
@@ -107,6 +118,14 @@ struct wh_server {
 	struct wl_listener lock_unlock;
 	struct wl_listener lock_destroy;
 
+	/* Idle: swayidle-style clients (ext-idle-notify), inhibitors such as
+	 * video players (idle-inhibit), and wlopm (output power management). */
+	struct wlr_idle_notifier_v1 *idle_notifier;
+	struct wlr_idle_inhibit_manager_v1 *idle_inhibit_mgr;
+	struct wl_listener new_idle_inhibitor;
+	struct wlr_output_power_manager_v1 *output_power_mgr;
+	struct wl_listener output_power_set_mode;
+
 	struct wlr_cursor *cursor;
 	struct wlr_xcursor_manager *cursor_mgr;
 	struct wl_listener cursor_motion;
@@ -127,6 +146,9 @@ struct wh_server {
 	struct wl_listener request_cursor;
 	struct wl_listener pointer_focus_change;
 	struct wl_listener request_set_selection;
+	struct wl_listener request_set_primary_selection;
+	struct wlr_cursor_shape_manager_v1 *cursor_shape_mgr;
+	struct wl_listener request_set_cursor_shape;
 	struct wl_list keyboards;
 	struct wlr_virtual_keyboard_manager_v1 *virtual_keyboard_mgr;
 	struct wl_listener new_virtual_keyboard;
@@ -203,6 +225,11 @@ struct wh_workspace {
 struct wh_lock_surface {
 	struct wlr_session_lock_surface_v1 *lock_surface;
 	struct wl_listener map;
+	struct wl_listener destroy;
+};
+
+struct wh_idle_inhibitor {
+	struct wlr_idle_inhibitor_v1 *inhibitor;
 	struct wl_listener destroy;
 };
 
@@ -289,6 +316,13 @@ static void view_apply_frame(struct wh_view *view) {
 	wlr_scene_node_set_position(&view->surface_tree->node, bw, bw);
 }
 
+/* Any real input counts as activity for idle clients (swayidle). */
+static void notify_activity(void) {
+	if (server.idle_notifier) {
+		wlr_idle_notifier_v1_notify_activity(server.idle_notifier, server.seat);
+	}
+}
+
 /* ---- keyboard ----------------------------------------------------------- */
 
 static void keyboard_handle_modifiers(struct wl_listener *listener, void *data) {
@@ -305,6 +339,7 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 
 	uint32_t keycode = event->keycode + 8;
 	bool handled = false;
+	notify_activity();
 
 	/* Ctrl+Alt+Fn always switches VT, whatever the brain does: it is the
 	 * escape hatch when something goes wrong. The keymap turns Ctrl+Alt+Fn
@@ -446,6 +481,20 @@ static void seat_request_set_selection(struct wl_listener *listener, void *data)
 	wlr_seat_set_selection(server.seat, event->source, event->serial);
 }
 
+static void seat_request_set_primary_selection(struct wl_listener *listener, void *data) {
+	struct wlr_seat_request_set_primary_selection_event *event = data;
+	wlr_seat_set_primary_selection(server.seat, event->source, event->serial);
+}
+
+/* Clients may name a cursor shape instead of sending an image. */
+static void request_set_cursor_shape(struct wl_listener *listener, void *data) {
+	struct wlr_cursor_shape_manager_v1_request_set_shape_event *event = data;
+	if (event->seat_client == server.seat->pointer_state.focused_client) {
+		wlr_cursor_set_xcursor(server.cursor, server.cursor_mgr,
+			wlr_cursor_shape_v1_name(event->shape));
+	}
+}
+
 static struct wh_view *view_at(double lx, double ly,
 		struct wlr_surface **surface, double *sx, double *sy) {
 	struct wlr_scene_node *node = wlr_scene_node_at(
@@ -519,6 +568,7 @@ static void end_grab(void) {
 }
 
 static void process_cursor_motion(uint32_t time) {
+	notify_activity();
 	if (server.grab_view) {
 		process_grab();
 		return;
@@ -587,6 +637,7 @@ static bool try_begin_grab(struct wlr_pointer_button_event *event) {
 
 static void server_cursor_button(struct wl_listener *listener, void *data) {
 	struct wlr_pointer_button_event *event = data;
+	notify_activity();
 	if (server.grab_view) {
 		if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
 			end_grab();
@@ -623,6 +674,7 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
 
 static void server_cursor_axis(struct wl_listener *listener, void *data) {
 	struct wlr_pointer_axis_event *event = data;
+	notify_activity();
 	wlr_seat_pointer_notify_axis(server.seat, event->time_msec,
 		event->orientation, event->delta, event->delta_discrete,
 		event->source, event->relative_direction);
@@ -1094,6 +1146,47 @@ static void server_new_layer_surface(struct wl_listener *listener, void *data) {
 	wl_signal_add(&ls->events.destroy, &l->destroy);
 }
 
+/* ---- idle inhibit and output power ------------------------------------- */
+
+/* Inhibited while any inhibitor exists (a destroyed one is still listed
+ * during its destroy signal, so it can be excluded). */
+static void update_idle_inhibit(struct wlr_idle_inhibitor_v1 *going) {
+	bool inhibited = false;
+	struct wlr_idle_inhibitor_v1 *inhibitor;
+	wl_list_for_each(inhibitor, &server.idle_inhibit_mgr->inhibitors, link) {
+		if (inhibitor != going) {
+			inhibited = true;
+			break;
+		}
+	}
+	wlr_idle_notifier_v1_set_inhibited(server.idle_notifier, inhibited);
+}
+
+static void idle_inhibitor_destroy(struct wl_listener *listener, void *data) {
+	struct wh_idle_inhibitor *i = wl_container_of(listener, i, destroy);
+	update_idle_inhibit(i->inhibitor);
+	wl_list_remove(&i->destroy.link);
+	free(i);
+}
+
+static void server_new_idle_inhibitor(struct wl_listener *listener, void *data) {
+	struct wh_idle_inhibitor *i = calloc(1, sizeof(*i));
+	i->inhibitor = data;
+	i->destroy.notify = idle_inhibitor_destroy;
+	wl_signal_add(&i->inhibitor->events.destroy, &i->destroy);
+	update_idle_inhibit(NULL);
+}
+
+static void output_power_set_mode(struct wl_listener *listener, void *data) {
+	struct wlr_output_power_v1_set_mode_event *event = data;
+	struct wlr_output_state state;
+	wlr_output_state_init(&state);
+	wlr_output_state_set_enabled(&state,
+		event->mode == ZWLR_OUTPUT_POWER_V1_MODE_ON);
+	wlr_output_commit_state(event->output, &state);
+	wlr_output_state_finish(&state);
+}
+
 /* ---- session lock (ext-session-lock-v1) --------------------------------- */
 
 static void lock_surface_map(struct wl_listener *listener, void *data) {
@@ -1363,6 +1456,15 @@ int wh_init(const char *xkb_layout) {
 	wlr_compositor_create(server.wl_display, 5, server.renderer);
 	wlr_subcompositor_create(server.wl_display);
 	wlr_data_device_manager_create(server.wl_display);
+	/* Small protocols many clients take for granted (mpv needs viewporter);
+	 * the scene graph handles them without further work. */
+	wlr_viewporter_create(server.wl_display);
+	wlr_single_pixel_buffer_manager_v1_create(server.wl_display);
+	wlr_fractional_scale_manager_v1_create(server.wl_display, 1);
+	wlr_primary_selection_v1_device_manager_create(server.wl_display);
+	/* Clipboard managers (cliphist, wl-clipboard --watch). */
+	wlr_data_control_manager_v1_create(server.wl_display);
+	wlr_ext_data_control_manager_v1_create(server.wl_display, 1);
 
 	server.output_layout = wlr_output_layout_create(server.wl_display);
 	server.new_output.notify = server_new_output;
@@ -1388,6 +1490,16 @@ int wh_init(const char *xkb_layout) {
 	server.lock_bg = wlr_scene_rect_create(server.layers[WH_LAYER_LOCK],
 		16384, 16384, lock_color);
 	wlr_scene_node_set_enabled(&server.lock_bg->node, false);
+	server.idle_notifier = wlr_idle_notifier_v1_create(server.wl_display);
+	server.idle_inhibit_mgr = wlr_idle_inhibit_v1_create(server.wl_display);
+	server.new_idle_inhibitor.notify = server_new_idle_inhibitor;
+	wl_signal_add(&server.idle_inhibit_mgr->events.new_inhibitor,
+		&server.new_idle_inhibitor);
+	server.output_power_mgr = wlr_output_power_manager_v1_create(server.wl_display);
+	server.output_power_set_mode.notify = output_power_set_mode;
+	wl_signal_add(&server.output_power_mgr->events.set_mode,
+		&server.output_power_set_mode);
+
 	server.lock_mgr = wlr_session_lock_manager_v1_create(server.wl_display);
 	server.new_lock.notify = server_new_lock;
 	wl_signal_add(&server.lock_mgr->events.new_lock, &server.new_lock);
@@ -1443,6 +1555,13 @@ int wh_init(const char *xkb_layout) {
 	server.pointer_focus_change.notify = seat_pointer_focus_change;
 	wl_signal_add(&server.seat->pointer_state.events.focus_change,
 		&server.pointer_focus_change);
+	server.request_set_primary_selection.notify = seat_request_set_primary_selection;
+	wl_signal_add(&server.seat->events.request_set_primary_selection,
+		&server.request_set_primary_selection);
+	server.cursor_shape_mgr = wlr_cursor_shape_manager_v1_create(server.wl_display, 1);
+	server.request_set_cursor_shape.notify = request_set_cursor_shape;
+	wl_signal_add(&server.cursor_shape_mgr->events.request_set_shape,
+		&server.request_set_cursor_shape);
 	server.request_set_selection.notify = seat_request_set_selection;
 	wl_signal_add(&server.seat->events.request_set_selection,
 		&server.request_set_selection);
@@ -1482,6 +1601,8 @@ void wh_shutdown(void) {
 	wl_list_remove(&server.new_decoration.link);
 	wl_list_remove(&server.new_layer_surface.link);
 	wl_list_remove(&server.new_lock.link);
+	wl_list_remove(&server.new_idle_inhibitor.link);
+	wl_list_remove(&server.output_power_set_mode.link);
 	if (server.lock) {
 		lock_release_listeners();
 	}
@@ -1499,6 +1620,8 @@ void wh_shutdown(void) {
 	wl_list_remove(&server.request_cursor.link);
 	wl_list_remove(&server.pointer_focus_change.link);
 	wl_list_remove(&server.request_set_selection.link);
+	wl_list_remove(&server.request_set_primary_selection.link);
+	wl_list_remove(&server.request_set_cursor_shape.link);
 	wl_list_remove(&server.new_output.link);
 
 	wlr_scene_node_destroy(&server.scene->tree.node);

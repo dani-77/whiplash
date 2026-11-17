@@ -1,0 +1,48 @@
+cabal-version:      3.0
+name:               whiplash
+version:            0.1.0
+synopsis:           An xmonad-style Wayland compositor: a C heart and a Haskell brain
+license:            MIT
+license-file:       LICENSE
+author:             Daniel Azevedo
+maintainer:         daniazevedo77@posteo.net
+category:           System
+build-type:         Simple
+extra-source-files:
+  heart/heart.h
+  heart/xdg-shell-protocol.h
+  heart/xdg-decoration-unstable-v1-protocol.h
+
+common shared
+  default-language: Haskell2010
+  ghc-options:      -Wall
+
+library
+  import:           shared
+  hs-source-dirs:   src
+  exposed-modules:
+    Whiplash
+    Whiplash.Core
+    Whiplash.Heart
+    Whiplash.Keys
+    Whiplash.Layout
+    Whiplash.StackSet
+  build-depends:
+    , base        >=4.17 && <5
+    , containers
+    , mtl
+  c-sources:        heart/heart.c
+  include-dirs:     heart
+  cc-options:       -DWLR_USE_UNSTABLE -Wall -Wno-unused-parameter
+  pkgconfig-depends:
+    , wlroots-0.20
+    , wayland-server
+    , xkbcommon
+
+executable whiplash
+  import:           shared
+  hs-source-dirs:   app
+  main-is:          Main.hs
+  build-depends:
+    , base
+    , whiplash

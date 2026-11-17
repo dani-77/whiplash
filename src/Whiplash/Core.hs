@@ -105,6 +105,7 @@ refresh = do
       H.setVisible v True
     forM_ (W.allWindows ws \\ wins) $ \v -> H.setVisible v False
     H.focusView (W.peek ws)
+    H.setActiveWorkspace (W.current ws)
 
 withFocused :: (H.ViewId -> X ()) -> X ()
 withFocused f = getState >>= maybe (pure ()) f . W.peek . windowSet
@@ -214,6 +215,7 @@ whiplash cfg = do
     windows (W.focusWindow v)
   H.onViewMoved $ \v (x, y, w, h) -> run "moved" $
     modifyState (\s -> s {floating = M.adjust (const (Rect x y w h)) v (floating s)})
+  H.onWorkspaceActivate $ \t -> run "workspace" (windows (W.view t))
   H.onOutput $ \(x, y, w, h) (ux, uy, uw, uh) -> run "output" $ do
     modifyState (\s -> s {fullRect = Rect x y w h, screen = Rect ux uy uw uh})
     refresh
@@ -223,6 +225,8 @@ whiplash cfg = do
   H.setMouseMod (modMask cfg)
   ok <- H.heartInit (keyboardLayout cfg)
   unless ok $ hPutStrLn stderr "whiplash: the heart failed to start" >> exitFailure
+  forM_ (workspaceTags cfg) $ \t -> H.addWorkspace t (show t)
+  run "workspaces" refresh
   unless skipHook $ run "startup" (startupHook cfg)
   forM_ startupCmd H.spawnCommand
   H.heartRun

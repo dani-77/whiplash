@@ -24,6 +24,7 @@
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_ext_workspace_v1.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
@@ -36,6 +37,7 @@
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_virtual_keyboard_v1.h>
+#include <wlr/types/wlr_virtual_pointer_v1.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
@@ -86,6 +88,12 @@ struct wh_server {
 	struct wlr_xdg_decoration_manager_v1 *decoration_mgr;
 	struct wl_listener new_decoration;
 
+	/* ext-workspace-v1: lets bars show and switch the brain's workspaces. */
+	struct wlr_ext_workspace_manager_v1 *workspace_mgr;
+	struct wlr_ext_workspace_group_handle_v1 *workspace_group;
+	struct wl_listener workspace_commit;
+	struct wl_list workspaces; /* struct wh_workspace.link */
+
 	struct wlr_cursor *cursor;
 	struct wlr_xcursor_manager *cursor_mgr;
 	struct wl_listener cursor_motion;
@@ -109,6 +117,8 @@ struct wh_server {
 	struct wl_list keyboards;
 	struct wlr_virtual_keyboard_manager_v1 *virtual_keyboard_mgr;
 	struct wl_listener new_virtual_keyboard;
+	struct wlr_virtual_pointer_manager_v1 *virtual_pointer_mgr;
+	struct wl_listener new_virtual_pointer;
 
 	struct wlr_output_layout *output_layout;
 	struct wl_list outputs;
@@ -171,6 +181,12 @@ struct wh_layer {
 	struct wl_listener destroy;
 };
 
+struct wh_workspace {
+	struct wl_list link;
+	int tag;
+	struct wlr_ext_workspace_handle_v1 *handle;
+};
+
 struct wh_popup {
 	struct wlr_xdg_popup *xdg_popup;
 	struct wl_listener commit;
@@ -196,6 +212,7 @@ static wh_output_cb cb_output;
 static wh_view_state_cb cb_view_fullscreen;
 static wh_view_rect_cb cb_view_grab;
 static wh_view_rect_cb cb_view_moved;
+static wh_workspace_cb cb_workspace_activate;
 
 void wh_on_view_mapped(wh_view_cb cb) { cb_view_mapped = cb; }
 void wh_on_view_unmapped(wh_view_cb cb) { cb_view_unmapped = cb; }
@@ -205,8 +222,10 @@ void wh_on_output(wh_output_cb cb) { cb_output = cb; }
 void wh_on_view_fullscreen(wh_view_state_cb cb) { cb_view_fullscreen = cb; }
 void wh_on_view_grab(wh_view_rect_cb cb) { cb_view_grab = cb; }
 void wh_on_view_moved(wh_view_rect_cb cb) { cb_view_moved = cb; }
+void wh_on_workspace_activate(wh_workspace_cb cb) { cb_workspace_activate = cb; }
 
 static void view_place(struct wh_view *view, int x, int y, int width, int height);
+static void ensure_workspace_group(void);
 
 static int view_border(struct wh_view *view) {
 	return view->mode == WH_VIEW_FULLSCREEN ? 0 : server.border_width;
@@ -379,6 +398,11 @@ static void server_new_virtual_keyboard(struct wl_listener *listener, void *data
 	server_new_keyboard(&keyboard->keyboard.base, true);
 	wlr_seat_set_capabilities(server.seat,
 		WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD);
+}
+
+static void server_new_virtual_pointer(struct wl_listener *listener, void *data) {
+	struct wlr_virtual_pointer_v1_new_pointer_event *event = data;
+	wlr_cursor_attach_input_device(server.cursor, &event->new_pointer->pointer.base);
 }
 
 /* ---- seat and pointer --------------------------------------------------- */
@@ -693,6 +717,7 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 		wlr_scene_output_create(server.scene, wlr_output);
 	wlr_scene_output_layout_add_output(server.scene_layout, l_output, scene_output);
 
+	ensure_workspace_group();
 	arrange_layers();
 }
 
@@ -895,6 +920,67 @@ static void server_new_decoration(struct wl_listener *listener, void *data) {
 	deco->destroy.notify = decoration_destroy;
 	wl_signal_add(&decoration->events.destroy, &deco->destroy);
 	decoration_apply(deco);
+}
+
+/* ---- workspaces (ext-workspace-v1) -------------------------------------- */
+
+/* Workspaces belong to the first output's group, created once an output
+ * exists; workspaces added before that join the group when it appears. */
+static void ensure_workspace_group(void) {
+	struct wlr_output *output = first_output();
+	if (server.workspace_group || !output || !server.workspace_mgr) {
+		return;
+	}
+	server.workspace_group =
+		wlr_ext_workspace_group_handle_v1_create(server.workspace_mgr, 0);
+	wlr_ext_workspace_group_handle_v1_output_enter(server.workspace_group, output);
+	struct wh_workspace *ws;
+	wl_list_for_each(ws, &server.workspaces, link) {
+		wlr_ext_workspace_handle_v1_set_group(ws->handle, server.workspace_group);
+	}
+}
+
+static void workspace_commit(struct wl_listener *listener, void *data) {
+	struct wlr_ext_workspace_v1_commit_event *event = data;
+	struct wlr_ext_workspace_v1_request *req;
+	wl_list_for_each(req, event->requests, link) {
+		if (req->type != WLR_EXT_WORKSPACE_V1_REQUEST_ACTIVATE ||
+				!req->activate.workspace || !cb_workspace_activate) {
+			continue;
+		}
+		struct wh_workspace *ws = req->activate.workspace->data;
+		if (ws) {
+			cb_workspace_activate(ws->tag);
+		}
+	}
+}
+
+void wh_workspace_add(int tag, const char *name) {
+	if (!server.workspace_mgr) {
+		return;
+	}
+	char id[32];
+	snprintf(id, sizeof(id), "whiplash-%d", tag);
+	struct wh_workspace *ws = calloc(1, sizeof(*ws));
+	ws->tag = tag;
+	ws->handle = wlr_ext_workspace_handle_v1_create(server.workspace_mgr, id,
+		EXT_WORKSPACE_HANDLE_V1_WORKSPACE_CAPABILITIES_ACTIVATE);
+	ws->handle->data = ws;
+	wlr_ext_workspace_handle_v1_set_name(ws->handle, name);
+	/* Bars such as Utumno sort by coordinates, so give each one. */
+	uint32_t coord = (uint32_t)tag;
+	wlr_ext_workspace_handle_v1_set_coordinates(ws->handle, &coord, 1);
+	if (server.workspace_group) {
+		wlr_ext_workspace_handle_v1_set_group(ws->handle, server.workspace_group);
+	}
+	wl_list_insert(server.workspaces.prev, &ws->link);
+}
+
+void wh_workspace_set_active(int tag) {
+	struct wh_workspace *ws;
+	wl_list_for_each(ws, &server.workspaces, link) {
+		wlr_ext_workspace_handle_v1_set_active(ws->handle, ws->tag == tag);
+	}
 }
 
 /* ---- layer shell (bars, launchers, wallpapers, lock screens) ------------ */
@@ -1186,6 +1272,13 @@ int wh_init(const char *xkb_layout) {
 
 	/* grim and friends; quickshell reads output names through xdg-output. */
 	wlr_screencopy_manager_v1_create(server.wl_display);
+
+	wl_list_init(&server.workspaces);
+	server.workspace_mgr = wlr_ext_workspace_manager_v1_create(server.wl_display, 1);
+	if (server.workspace_mgr) {
+		server.workspace_commit.notify = workspace_commit;
+		wl_signal_add(&server.workspace_mgr->events.commit, &server.workspace_commit);
+	}
 	wlr_xdg_output_manager_v1_create(server.wl_display, server.output_layout);
 
 	server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
@@ -1219,6 +1312,10 @@ int wh_init(const char *xkb_layout) {
 	server.seat = wlr_seat_create(server.wl_display, "seat0");
 	server.virtual_keyboard_mgr =
 		wlr_virtual_keyboard_manager_v1_create(server.wl_display);
+	server.virtual_pointer_mgr = wlr_virtual_pointer_manager_v1_create(server.wl_display);
+	server.new_virtual_pointer.notify = server_new_virtual_pointer;
+	wl_signal_add(&server.virtual_pointer_mgr->events.new_virtual_pointer,
+		&server.new_virtual_pointer);
 	server.new_virtual_keyboard.notify = server_new_virtual_keyboard;
 	wl_signal_add(&server.virtual_keyboard_mgr->events.new_virtual_keyboard,
 		&server.new_virtual_keyboard);
@@ -1265,6 +1362,9 @@ void wh_shutdown(void) {
 	wl_list_remove(&server.new_xdg_popup.link);
 	wl_list_remove(&server.new_decoration.link);
 	wl_list_remove(&server.new_layer_surface.link);
+	if (server.workspace_mgr) {
+		wl_list_remove(&server.workspace_commit.link);
+	}
 	wl_list_remove(&server.cursor_motion.link);
 	wl_list_remove(&server.cursor_motion_absolute.link);
 	wl_list_remove(&server.cursor_button.link);
@@ -1272,6 +1372,7 @@ void wh_shutdown(void) {
 	wl_list_remove(&server.cursor_frame.link);
 	wl_list_remove(&server.new_input.link);
 	wl_list_remove(&server.new_virtual_keyboard.link);
+	wl_list_remove(&server.new_virtual_pointer.link);
 	wl_list_remove(&server.request_cursor.link);
 	wl_list_remove(&server.pointer_focus_change.link);
 	wl_list_remove(&server.request_set_selection.link);

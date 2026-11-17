@@ -19,6 +19,9 @@ module Whiplash.Heart
   , wantsFloat
   , naturalSize
   , setMouseMod
+  , onWorkspaceActivate
+  , addWorkspace
+  , setActiveWorkspace
   , heartInit
   , heartRun
   , heartQuit
@@ -51,12 +54,14 @@ type CKeyCb = Word32 -> Word32 -> IO CInt
 type COutputCb = CInt -> CInt -> CInt -> CInt -> CInt -> CInt -> CInt -> CInt -> IO ()
 type CStateCb = Word32 -> CInt -> IO ()
 type CRectCb = Word32 -> CInt -> CInt -> CInt -> CInt -> IO ()
+type CTagCb = CInt -> IO ()
 
 foreign import ccall "wrapper" mkViewCb :: CViewCb -> IO (FunPtr CViewCb)
 foreign import ccall "wrapper" mkKeyCb :: CKeyCb -> IO (FunPtr CKeyCb)
 foreign import ccall "wrapper" mkOutputCb :: COutputCb -> IO (FunPtr COutputCb)
 foreign import ccall "wrapper" mkStateCb :: CStateCb -> IO (FunPtr CStateCb)
 foreign import ccall "wrapper" mkRectCb :: CRectCb -> IO (FunPtr CRectCb)
+foreign import ccall "wrapper" mkTagCb :: CTagCb -> IO (FunPtr CTagCb)
 
 foreign import ccall unsafe "wh_on_view_mapped" c_on_view_mapped :: FunPtr CViewCb -> IO ()
 foreign import ccall unsafe "wh_on_view_unmapped" c_on_view_unmapped :: FunPtr CViewCb -> IO ()
@@ -71,6 +76,9 @@ foreign import ccall unsafe "wh_view_wants_float" c_wants_float :: Word32 -> IO 
 foreign import ccall unsafe "wh_view_natural_width" c_natural_width :: Word32 -> IO CInt
 foreign import ccall unsafe "wh_view_natural_height" c_natural_height :: Word32 -> IO CInt
 foreign import ccall unsafe "wh_set_mouse_mod" c_set_mouse_mod :: Word32 -> IO ()
+foreign import ccall unsafe "wh_on_workspace_activate" c_on_workspace_activate :: FunPtr CTagCb -> IO ()
+foreign import ccall unsafe "wh_workspace_add" c_workspace_add :: CInt -> CString -> IO ()
+foreign import ccall unsafe "wh_workspace_set_active" c_workspace_set_active :: CInt -> IO ()
 
 -- Calls that can re-enter Haskell through callbacks must be "safe".
 foreign import ccall safe "wh_init" c_init :: CString -> IO CInt
@@ -128,6 +136,17 @@ naturalSize v = do
 
 setMouseMod :: Word32 -> IO ()
 setMouseMod = c_set_mouse_mod
+
+-- | A bar asked to switch to this workspace.
+onWorkspaceActivate :: (Int -> IO ()) -> IO ()
+onWorkspaceActivate f = mkTagCb (f . fromIntegral) >>= c_on_workspace_activate
+
+-- | Announce a workspace to bars (ext-workspace-v1).
+addWorkspace :: Int -> String -> IO ()
+addWorkspace tag name = withCString name (c_workspace_add (fromIntegral tag))
+
+setActiveWorkspace :: Int -> IO ()
+setActiveWorkspace = c_workspace_set_active . fromIntegral
 
 -- | Start the backend. Returns False when wlroots could not start.
 heartInit :: Maybe String -> IO Bool

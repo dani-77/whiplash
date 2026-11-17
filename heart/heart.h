@@ -26,6 +26,7 @@ typedef void (*wh_output_cb)(int x, int y, int width, int height,
 	int ux, int uy, int uwidth, int uheight);
 typedef void (*wh_view_state_cb)(wh_view_id id, int on);
 typedef void (*wh_view_rect_cb)(wh_view_id id, int x, int y, int width, int height);
+typedef void (*wh_workspace_cb)(int tag);
 
 enum wh_view_mode {
 	WH_VIEW_TILED = 0,
@@ -44,6 +45,8 @@ void wh_on_view_fullscreen(wh_view_state_cb cb);
 void wh_on_view_grab(wh_view_rect_cb cb);
 /* A drag ended; this is the view's new outer rectangle. */
 void wh_on_view_moved(wh_view_rect_cb cb);
+/* A bar asked to switch to this workspace (ext-workspace-v1). */
+void wh_on_workspace_activate(wh_workspace_cb cb);
 
 /* Lifecycle. wh_init returns 0 on success. xkb_layout may be NULL. */
 int wh_init(const char *xkb_layout);
@@ -62,6 +65,9 @@ int wh_view_wants_float(wh_view_id id);
 int wh_view_natural_width(wh_view_id id);
 int wh_view_natural_height(wh_view_id id);
 void wh_set_mouse_mod(uint32_t mods);
+/* Announce a workspace to bars (after wh_init), and which one is shown. */
+void wh_workspace_add(int tag, const char *name);
+void wh_workspace_set_active(int tag);
 void wh_set_border(int width, uint32_t focused_rgba, uint32_t normal_rgba);
 void wh_spawn(const char *command);
 

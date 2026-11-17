@@ -19,7 +19,9 @@
 #include <sys/inotify.h>
 #include <fcntl.h>
 #include <wayland-server-core.h>
+#include <libinput.h>
 #include <wlr/backend.h>
+#include <wlr/backend/libinput.h>
 #include <wlr/backend/session.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
@@ -566,6 +568,28 @@ static void server_new_keyboard(struct wlr_input_device *device, bool is_virtual
 	wl_list_insert(&server.keyboards, &keyboard->link);
 }
 
+/* Touchpads come out of libinput with tap-to-click off. Turn on the same
+ * defaults as wasp: tap, tap-and-drag, drag lock, disable while typing. */
+static void configure_pointer(struct wlr_input_device *device) {
+	if (!wlr_input_device_is_libinput(device)) {
+		return;
+	}
+	struct libinput_device *dev = wlr_libinput_get_device_handle(device);
+	if (!dev) {
+		return;
+	}
+	if (libinput_device_config_tap_get_finger_count(dev) > 0) {
+		libinput_device_config_tap_set_enabled(dev, LIBINPUT_CONFIG_TAP_ENABLED);
+		libinput_device_config_tap_set_button_map(dev, LIBINPUT_CONFIG_TAP_MAP_LRM);
+		libinput_device_config_tap_set_drag_enabled(dev, LIBINPUT_CONFIG_DRAG_ENABLED);
+		libinput_device_config_tap_set_drag_lock_enabled(dev,
+			LIBINPUT_CONFIG_DRAG_LOCK_ENABLED);
+	}
+	if (libinput_device_config_dwt_is_available(dev)) {
+		libinput_device_config_dwt_set_enabled(dev, LIBINPUT_CONFIG_DWT_ENABLED);
+	}
+}
+
 static void server_new_input(struct wl_listener *listener, void *data) {
 	struct wlr_input_device *device = data;
 	switch (device->type) {
@@ -573,6 +597,7 @@ static void server_new_input(struct wl_listener *listener, void *data) {
 		server_new_keyboard(device, false);
 		break;
 	case WLR_INPUT_DEVICE_POINTER:
+		configure_pointer(device);
 		wlr_cursor_attach_input_device(server.cursor, device);
 		break;
 	default:

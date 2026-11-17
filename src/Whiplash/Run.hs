@@ -83,6 +83,8 @@ whiplash defaults = do
         (_ : cmd : _) -> Just cmd
         _ -> Nothing
       skipHook = "-n" `elem` args
+  -- Started inside another graphical session (a nested test run)?
+  nested <- or <$> mapM (fmap (maybe False (not . null)) . lookupEnv) ["WAYLAND_DISPLAY", "DISPLAY"]
   (dir, name) <- configPath
   let path = dir ++ "/" ++ name
 
@@ -146,6 +148,12 @@ whiplash defaults = do
   createDirectoryIfMissing True dir
   watching <- H.watchConfig dir name
   unless watching $ hPutStrLn stderr ("whiplash: cannot watch " ++ dir ++ "; no hot reload")
+  -- D-Bus-activated services (portals: screen sharing, file pickers) only
+  -- see the environment the bus was started with, from before whiplash
+  -- set WAYLAND_DISPLAY/DISPLAY. Never from a nested run: it would point
+  -- the host session's portals at the nested display.
+  unless nested $
+    H.spawnCommand "dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP"
   forM_ (workspaceTags cfg0) $ \t -> H.addWorkspace t (show t)
   run "workspaces" refresh
   unless skipHook $ run "startup" (startupHook cfg0)

@@ -27,11 +27,13 @@ install: all
 	install -Dm755 data/whiplash-session $(DESTDIR)$(PREFIX)/bin/whiplash-session
 	install -Dm644 data/whiplash.desktop $(DESTDIR)$(PREFIX)/share/wayland-sessions/whiplash.desktop
 	install -Dm644 data/config.toml $(DESTDIR)$(PREFIX)/share/whiplash/config.toml
+	install -Dm644 data/whiplash-portals.conf $(DESTDIR)$(PREFIX)/share/xdg-desktop-portal/whiplash-portals.conf
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/whiplash $(DESTDIR)$(PREFIX)/bin/whiplash-session \
 		$(DESTDIR)$(PREFIX)/share/wayland-sessions/whiplash.desktop \
-		$(DESTDIR)$(PREFIX)/share/whiplash/config.toml
+		$(DESTDIR)$(PREFIX)/share/whiplash/config.toml \
+		$(DESTDIR)$(PREFIX)/share/xdg-desktop-portal/whiplash-portals.conf
 
 clean:
 	cabal clean

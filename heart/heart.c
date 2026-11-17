@@ -29,6 +29,7 @@
 #include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_ext_data_control_v1.h>
+#include <wlr/types/wlr_export_dmabuf_v1.h>
 #include <wlr/types/wlr_ext_workspace_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
@@ -2053,8 +2054,11 @@ int wh_init(void) {
 	server.new_layer_surface.notify = server_new_layer_surface;
 	wl_signal_add(&server.layer_shell->events.new_surface, &server.new_layer_surface);
 
-	/* grim and friends; quickshell reads output names through xdg-output. */
+	/* grim and friends; quickshell reads output names through xdg-output.
+	 * xdg-desktop-portal-wlr (screen sharing) uses screencopy and
+	 * export-dmabuf. */
 	wlr_screencopy_manager_v1_create(server.wl_display);
+	wlr_export_dmabuf_manager_v1_create(server.wl_display);
 
 	/* Covers every output while locked; 16k is larger than any layout. */
 	static const float lock_color[4] = { 0.06f, 0.06f, 0.08f, 1.0f };

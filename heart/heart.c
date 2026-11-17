@@ -17,6 +17,7 @@
 #include <sys/wait.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
+#include <wlr/backend/session.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_cursor.h>
@@ -43,6 +44,7 @@
 struct wh_server {
 	struct wl_display *wl_display;
 	struct wlr_backend *backend;
+	struct wlr_session *session; /* NULL when nested */
 	struct wlr_renderer *renderer;
 	struct wlr_allocator *allocator;
 	struct wlr_scene *scene;
@@ -207,6 +209,23 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 
 	uint32_t keycode = event->keycode + 8;
 	bool handled = false;
+
+	/* Ctrl+Alt+Fn always switches VT, whatever the brain does: it is the
+	 * escape hatch when something goes wrong. The keymap turns Ctrl+Alt+Fn
+	 * into XF86Switch_VT_n at the active level, so check those syms. */
+	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED && server.session) {
+		const xkb_keysym_t *active;
+		int nactive = xkb_state_key_get_syms(keyboard->wlr_keyboard->xkb_state,
+			keycode, &active);
+		for (int i = 0; i < nactive; i++) {
+			if (active[i] >= XKB_KEY_XF86Switch_VT_1 &&
+					active[i] <= XKB_KEY_XF86Switch_VT_12) {
+				wlr_session_change_vt(server.session,
+					active[i] - XKB_KEY_XF86Switch_VT_1 + 1);
+				return;
+			}
+		}
+	}
 
 	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED && cb_key) {
 		/* Bindings see the unshifted (level 0) keysym, so "Mod+Shift+j" is
@@ -747,7 +766,7 @@ int wh_init(const char *xkb_layout) {
 
 	server.wl_display = wl_display_create();
 	server.backend = wlr_backend_autocreate(
-		wl_display_get_event_loop(server.wl_display), NULL);
+		wl_display_get_event_loop(server.wl_display), &server.session);
 	if (server.backend == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_backend");
 		return 1;

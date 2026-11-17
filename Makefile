@@ -18,9 +18,15 @@ run: all
 
 install: all
 	install -Dm755 $$(cabal list-bin --offline whiplash) $(DESTDIR)$(PREFIX)/bin/whiplash
+	install -Dm755 data/whiplash-session $(DESTDIR)$(PREFIX)/bin/whiplash-session
+	install -Dm644 data/whiplash.desktop $(DESTDIR)$(PREFIX)/share/wayland-sessions/whiplash.desktop
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/whiplash $(DESTDIR)$(PREFIX)/bin/whiplash-session \
+		$(DESTDIR)$(PREFIX)/share/wayland-sessions/whiplash.desktop
 
 clean:
 	cabal clean
 	rm -f heart/*-protocol.h
 
-.PHONY: all run install clean
+.PHONY: all run install uninstall clean

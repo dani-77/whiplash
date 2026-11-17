@@ -1,0 +1,16 @@
+#!/bin/sh
+# whiplash session wrapper: what whiplash.desktop points the greeter at.
+#
+# dbus-run-session gives the session a real D-Bus session bus, so GTK/Qt
+# apps and portals find one from the start. XDG_CURRENT_DESKTOP lets
+# xdg-desktop-portal pick a whiplash-specific portals.conf later on.
+#
+# Output goes to $XDG_STATE_HOME/whiplash/whiplash.log; the previous
+# session's log is kept as whiplash.log.old so a crash can be read after
+# logging back in.
+export XDG_CURRENT_DESKTOP=whiplash
+logdir=${XDG_STATE_HOME:-$HOME/.local/state}/whiplash
+mkdir -p "$logdir"
+[ -f "$logdir/whiplash.log" ] && mv -f "$logdir/whiplash.log" "$logdir/whiplash.log.old"
+exec >"$logdir/whiplash.log" 2>&1
+exec dbus-run-session -- whiplash "$@"

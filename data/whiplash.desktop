@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Whiplash
+Comment=xmonad-style Wayland compositor with a Haskell brain
+Exec=whiplash-session
+Type=Application
+DesktopNames=whiplash

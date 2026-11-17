@@ -1,7 +1,7 @@
 PREFIX ?= /usr/local
 WAYLAND_PROTOCOLS := $(shell pkg-config --variable=pkgdatadir wayland-protocols)
 
-all: heart/xdg-shell-protocol.h heart/xdg-decoration-unstable-v1-protocol.h
+all: heart/xdg-shell-protocol.h heart/xdg-decoration-unstable-v1-protocol.h heart/wlr-layer-shell-unstable-v1-protocol.h
 	cabal build --offline exe:whiplash
 
 heart/xdg-shell-protocol.h:
@@ -11,6 +11,9 @@ heart/xdg-shell-protocol.h:
 heart/xdg-decoration-unstable-v1-protocol.h:
 	wayland-scanner server-header \
 		$(WAYLAND_PROTOCOLS)/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml $@
+
+heart/wlr-layer-shell-unstable-v1-protocol.h:
+	wayland-scanner server-header protocols/wlr-layer-shell-unstable-v1.xml $@
 
 # Run nested inside the current Wayland session.
 run: all

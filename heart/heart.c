@@ -34,6 +34,7 @@
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_seat.h>
+#include <wlr/types/wlr_session_lock_v1.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_virtual_keyboard_v1.h>
@@ -57,6 +58,7 @@ enum wh_scene_layer {
 	WH_LAYER_TOP,
 	WH_LAYER_FULLSCREEN, /* above bars, below lock screens */
 	WH_LAYER_OVERLAY,
+	WH_LAYER_LOCK, /* ext-session-lock surfaces, above everything */
 	WH_LAYER_COUNT,
 };
 
@@ -93,6 +95,17 @@ struct wh_server {
 	struct wlr_ext_workspace_group_handle_v1 *workspace_group;
 	struct wl_listener workspace_commit;
 	struct wl_list workspaces; /* struct wh_workspace.link */
+
+	/* ext-session-lock-v1. While locked only lock surfaces get input and
+	 * an opaque rect hides everything else, even if the locker dies. */
+	struct wlr_session_lock_manager_v1 *lock_mgr;
+	struct wl_listener new_lock;
+	struct wlr_session_lock_v1 *lock; /* NULL once its client is gone */
+	bool locked;
+	struct wlr_scene_rect *lock_bg;
+	struct wl_listener lock_new_surface;
+	struct wl_listener lock_unlock;
+	struct wl_listener lock_destroy;
 
 	struct wlr_cursor *cursor;
 	struct wlr_xcursor_manager *cursor_mgr;
@@ -185,6 +198,12 @@ struct wh_workspace {
 	struct wl_list link;
 	int tag;
 	struct wlr_ext_workspace_handle_v1 *handle;
+};
+
+struct wh_lock_surface {
+	struct wlr_session_lock_surface_v1 *lock_surface;
+	struct wl_listener map;
+	struct wl_listener destroy;
 };
 
 struct wh_popup {
@@ -304,7 +323,7 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 		}
 	}
 
-	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED && cb_key) {
+	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED && cb_key && !server.locked) {
 		/* Bindings see the unshifted (level 0) keysym, so "Mod+Shift+j" is
 		 * written with a lowercase j and number keys stay numbers on every
 		 * layout. Lock modifiers (Caps, Num) are ignored. */
@@ -469,6 +488,9 @@ static void keyboard_enter(struct wlr_surface *surface) {
 }
 
 static void focus_layer(struct wlr_layer_surface_v1 *layer_surface) {
+	if (server.locked) {
+		return;
+	}
 	server.focused_layer = layer_surface;
 	keyboard_enter(layer_surface->surface);
 }
@@ -569,6 +591,11 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
 		if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
 			end_grab();
 		}
+		return;
+	}
+	if (server.locked) {
+		wlr_seat_pointer_notify_button(server.seat, event->time_msec,
+			event->button, event->state);
 		return;
 	}
 	if (event->state == WL_POINTER_BUTTON_STATE_PRESSED && try_begin_grab(event)) {
@@ -1067,6 +1094,86 @@ static void server_new_layer_surface(struct wl_listener *listener, void *data) {
 	wl_signal_add(&ls->events.destroy, &l->destroy);
 }
 
+/* ---- session lock (ext-session-lock-v1) --------------------------------- */
+
+static void lock_surface_map(struct wl_listener *listener, void *data) {
+	struct wh_lock_surface *l = wl_container_of(listener, l, map);
+	keyboard_enter(l->lock_surface->surface);
+}
+
+static void lock_surface_destroy(struct wl_listener *listener, void *data) {
+	struct wh_lock_surface *l = wl_container_of(listener, l, destroy);
+	wl_list_remove(&l->map.link);
+	wl_list_remove(&l->destroy.link);
+	free(l);
+}
+
+static void lock_new_surface(struct wl_listener *listener, void *data) {
+	struct wlr_session_lock_surface_v1 *lock_surface = data;
+	struct wh_lock_surface *l = calloc(1, sizeof(*l));
+	l->lock_surface = lock_surface;
+
+	struct wlr_scene_tree *tree = wlr_scene_subsurface_tree_create(
+		server.layers[WH_LAYER_LOCK], lock_surface->surface);
+	struct wlr_box box;
+	wlr_output_layout_get_box(server.output_layout, lock_surface->output, &box);
+	wlr_scene_node_set_position(&tree->node, box.x, box.y);
+	wlr_session_lock_surface_v1_configure(lock_surface, box.width, box.height);
+
+	l->map.notify = lock_surface_map;
+	wl_signal_add(&lock_surface->surface->events.map, &l->map);
+	l->destroy.notify = lock_surface_destroy;
+	wl_signal_add(&lock_surface->events.destroy, &l->destroy);
+}
+
+static void lock_release_listeners(void) {
+	wl_list_remove(&server.lock_new_surface.link);
+	wl_list_remove(&server.lock_unlock.link);
+	wl_list_remove(&server.lock_destroy.link);
+	server.lock = NULL;
+}
+
+static void lock_unlock(struct wl_listener *listener, void *data) {
+	lock_release_listeners();
+	server.locked = false;
+	wlr_scene_node_set_enabled(&server.lock_bg->node, false);
+	restore_view_focus();
+}
+
+static void lock_destroy(struct wl_listener *listener, void *data) {
+	/* The locker went away without unlocking (crashed or killed): the
+	 * session stays locked until a new locker unlocks it. */
+	lock_release_listeners();
+	wlr_seat_keyboard_notify_clear_focus(server.seat);
+}
+
+static void server_new_lock(struct wl_listener *listener, void *data) {
+	struct wlr_session_lock_v1 *lock = data;
+	if (server.lock) {
+		/* Another locker is already active. */
+		wlr_session_lock_v1_destroy(lock);
+		return;
+	}
+	server.lock = lock;
+	server.locked = true;
+	server.focused_layer = NULL;
+	server.grab_view = NULL;
+	server.grab_mode = WH_GRAB_NONE;
+	wlr_scene_node_set_enabled(&server.lock_bg->node, true);
+	wlr_seat_keyboard_notify_clear_focus(server.seat);
+	wlr_seat_pointer_clear_focus(server.seat);
+
+	server.lock_new_surface.notify = lock_new_surface;
+	wl_signal_add(&lock->events.new_surface, &server.lock_new_surface);
+	server.lock_unlock.notify = lock_unlock;
+	wl_signal_add(&lock->events.unlock, &server.lock_unlock);
+	server.lock_destroy.notify = lock_destroy;
+	wl_signal_add(&lock->events.destroy, &server.lock_destroy);
+
+	/* Everything is already hidden behind lock_bg. */
+	wlr_session_lock_v1_send_locked(lock);
+}
+
 /* ---- commands from the brain -------------------------------------------- */
 
 static void view_place(struct wh_view *view, int x, int y, int width, int height) {
@@ -1158,6 +1265,9 @@ void wh_view_focus(wh_view_id id) {
 	struct wh_view *other;
 	wl_list_for_each(other, &server.views, link) {
 		view_paint_border(other, other == view);
+	}
+	if (server.locked) {
+		return;
 	}
 	/* An exclusive layer (lock screen, open launcher) keeps the keyboard
 	 * until it goes away; the choice is remembered for then. */
@@ -1273,6 +1383,15 @@ int wh_init(const char *xkb_layout) {
 	/* grim and friends; quickshell reads output names through xdg-output. */
 	wlr_screencopy_manager_v1_create(server.wl_display);
 
+	/* Covers every output while locked; 16k is larger than any layout. */
+	static const float lock_color[4] = { 0.06f, 0.06f, 0.08f, 1.0f };
+	server.lock_bg = wlr_scene_rect_create(server.layers[WH_LAYER_LOCK],
+		16384, 16384, lock_color);
+	wlr_scene_node_set_enabled(&server.lock_bg->node, false);
+	server.lock_mgr = wlr_session_lock_manager_v1_create(server.wl_display);
+	server.new_lock.notify = server_new_lock;
+	wl_signal_add(&server.lock_mgr->events.new_lock, &server.new_lock);
+
 	wl_list_init(&server.workspaces);
 	server.workspace_mgr = wlr_ext_workspace_manager_v1_create(server.wl_display, 1);
 	if (server.workspace_mgr) {
@@ -1362,6 +1481,10 @@ void wh_shutdown(void) {
 	wl_list_remove(&server.new_xdg_popup.link);
 	wl_list_remove(&server.new_decoration.link);
 	wl_list_remove(&server.new_layer_surface.link);
+	wl_list_remove(&server.new_lock.link);
+	if (server.lock) {
+		lock_release_listeners();
+	}
 	if (server.workspace_mgr) {
 		wl_list_remove(&server.workspace_commit.link);
 	}

@@ -46,7 +46,7 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain of
   where
     topKeys =
       [ "terminal", "mod", "gaps", "border", "layouts", "workspaces"
-      , "keyboard", "autostart", "keybinds"
+      , "keyboard", "autostart", "keybinds", "outputs"
       ]
     plain cfg =
       pure cfg
@@ -58,6 +58,7 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain of
         >>= field "workspaces" workspaces (\v c -> c {workspaceTags = v})
         >>= field "keyboard" (keyboardTable (keyboard cfg)) (\v c -> c {keyboard = v})
         >>= field "autostart" (strList "autostart") (\v c -> c {startupHook = mapM_ spawn v})
+        >>= field "outputs" outputTable (\v c -> c {outputRules = v})
     field :: String -> (Value -> Result a) -> (a -> Config -> Config) -> Config -> Result Config
     field k decode set c = case M.lookup k t of
       Nothing -> Right c
@@ -149,8 +150,26 @@ keyboardTable kb (VTable k) = do
   Right (KeyboardSettings l v o r d)
 keyboardTable _ v = Left ("expected a table, got " ++ typeName v)
 
+-- | [outputs."eDP-1"] with scale = 1.5 and/or position = [x, y].
+outputTable :: Value -> Result [OutputRule]
+outputTable (VTable outs) = mapM one (M.toList outs)
+  where
+    one (name, VTable o) = either (Left . ((name ++ ": ") ++)) Right $ do
+      _ <- checkKeys "" ["scale", "position"] o ()
+      sc <- maybe (Right 0) scale (M.lookup "scale" o)
+      pos <- maybe (Right Nothing) (fmap Just . position) (M.lookup "position" o)
+      Right (name, sc, pos)
+    one (name, v) = Left (name ++ ": expected a table, got " ++ typeName v)
+    scale (VFloat d) | d >= 0.5 && d <= 4 = Right d
+    scale (VInt n) | n >= 1 && n <= 4 = Right (fromIntegral n)
+    scale v = Left ("scale must be between 0.5 and 4, got " ++ showValue v)
+    position (VArray [VInt x, VInt y]) = Right (fromIntegral x, fromIntegral y)
+    position v = Left ("position is written [x, y], got " ++ typeName v)
+outputTable v = Left ("expected a table, got " ++ typeName v)
+
 showValue :: Value -> String
 showValue (VInt n) = show n
+showValue (VFloat d) = show d
 showValue v = typeName v
 
 -- Key bindings -----------------------------------------------------------
@@ -204,6 +223,7 @@ actionNames =
   , "workspace <n>", "move-to-workspace <n>", "workspace-previous"
   , "layout <name>", "next-layout", "master-ratio <+/-delta>"
   , "toggle-float", "fullscreen"
+  , "focus-screen next|prev", "move-to-screen next|prev"
   ]
 
 parseAction :: Config -> String -> Result (X ())
@@ -230,10 +250,17 @@ parseAction cfg text = case words text of
   ["master-ratio", d] -> case readMaybe (dropWhile (== '+') d) :: Maybe Double of
     Just x | abs x < 1 -> Right (incRatio x)
     _ -> Left ("master-ratio wants a step like +0.05 or -0.05, not " ++ show d)
+  ["focus-screen", dir] -> focusScreenBy <$> direction dir
+  ["move-to-screen", dir] -> moveToScreenBy <$> direction dir
   ["toggle-float"] -> Right toggleFloat
   ["fullscreen"] -> Right toggleFullscreen
   _ -> Left ("unknown action " ++ show text ++ " (known: " ++ intercalate ", " actionNames ++ ")")
   where
+    direction d = case map toLower d of
+      "next" -> Right 1
+      "prev" -> Right (-1)
+      "previous" -> Right (-1)
+      _ -> Left ("expected next or prev, not " ++ show d)
     tag n = case readMaybe n of
       Just t | t `elem` workspaceTags cfg -> Right t
       _ -> Left ("no workspace " ++ show n)

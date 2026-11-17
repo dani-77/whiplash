@@ -95,8 +95,8 @@ struct wh_server {
 	struct wlr_layer_surface_v1 *focused_layer;
 	/* Last view the brain focused, restored when a layer lets go. */
 	wh_view_id focused_view;
-	/* Output area left after exclusive zones (bars), as reported. */
-	struct wlr_box usable;
+	struct wl_list output_rules; /* struct wh_output_rule.link */
+	struct wlr_output *workspace_group_output;
 
 	struct wlr_xdg_shell *xdg_shell;
 	struct wl_listener new_xdg_toplevel;
@@ -190,6 +190,8 @@ struct wh_output {
 	struct wl_list link;
 	struct wh_server *server;
 	struct wlr_output *wlr_output;
+	/* Layout box, and what is left of it after bars (exclusive zones). */
+	struct wlr_box full, usable;
 	struct wl_listener frame;
 	struct wl_listener request_state;
 	struct wl_listener destroy;
@@ -273,6 +275,15 @@ struct wh_idle_inhibitor {
 	struct wl_listener destroy;
 };
 
+/* Per-output settings from the config, matched by connector name. */
+struct wh_output_rule {
+	struct wl_list link;
+	char *name;
+	float scale; /* <= 0: leave as is */
+	int x, y;
+	bool has_position;
+};
+
 struct wh_popup {
 	struct wlr_xdg_popup *xdg_popup;
 	struct wl_listener commit;
@@ -295,7 +306,7 @@ static wh_view_cb cb_view_mapped;
 static wh_view_cb cb_view_unmapped;
 static wh_view_cb cb_view_clicked;
 static wh_key_cb cb_key;
-static wh_output_cb cb_output;
+static wh_void_cb cb_outputs_changed;
 static wh_view_state_cb cb_view_fullscreen;
 static wh_view_rect_cb cb_view_grab;
 static wh_view_rect_cb cb_view_moved;
@@ -306,7 +317,7 @@ void wh_on_view_mapped(wh_view_cb cb) { cb_view_mapped = cb; }
 void wh_on_view_unmapped(wh_view_cb cb) { cb_view_unmapped = cb; }
 void wh_on_view_clicked(wh_view_cb cb) { cb_view_clicked = cb; }
 void wh_on_key(wh_key_cb cb) { cb_key = cb; }
-void wh_on_output(wh_output_cb cb) { cb_output = cb; }
+void wh_on_outputs_changed(wh_void_cb cb) { cb_outputs_changed = cb; }
 void wh_on_view_fullscreen(wh_view_state_cb cb) { cb_view_fullscreen = cb; }
 void wh_on_view_grab(wh_view_rect_cb cb) { cb_view_grab = cb; }
 void wh_on_view_moved(wh_view_rect_cb cb) { cb_view_moved = cb; }
@@ -825,19 +836,19 @@ static struct wlr_output *first_output(void) {
 	if (wl_list_empty(&server.outputs)) {
 		return NULL;
 	}
-	struct wh_output *output = wl_container_of(server.outputs.prev, output, link);
+	/* Outputs are kept in the order they appeared. */
+	struct wh_output *output = wl_container_of(server.outputs.next, output, link);
 	return output->wlr_output;
 }
 
 /* Place layer surfaces (exclusive ones first, so bars carve out their space
  * before anything else is anchored) and tell the brain what area is left. */
-static void arrange_layers(void) {
-	struct wlr_output *output = first_output();
-	if (!output) {
-		return;
-	}
+static void arrange_output_layers(struct wh_output *wh_output) {
+	struct wlr_output *output = wh_output->wlr_output;
 	struct wlr_box full;
 	wlr_output_layout_get_box(server.output_layout, output, &full);
+	wh_output->full = full;
+	wh_output->usable = full;
 	if (wlr_box_empty(&full)) {
 		return;
 	}
@@ -857,11 +868,131 @@ static void arrange_layers(void) {
 			}
 		}
 	}
-	server.usable = usable;
-	if (cb_output) {
-		cb_output(full.x, full.y, full.width, full.height,
-			usable.x, usable.y, usable.width, usable.height);
+	wh_output->usable = usable;
+}
+
+static void arrange_layers(void) {
+	struct wh_output *output;
+	wl_list_for_each(output, &server.outputs, link) {
+		arrange_output_layers(output);
 	}
+	if (cb_outputs_changed) {
+		cb_outputs_changed();
+	}
+}
+
+/* Outputs in screen order: left to right, then top to bottom. */
+static int sorted_outputs(struct wh_output **out, int max) {
+	int n = 0;
+	struct wh_output *output;
+	wl_list_for_each(output, &server.outputs, link) {
+		if (n < max && !wlr_box_empty(&output->full)) {
+			out[n++] = output;
+		}
+	}
+	for (int i = 1; i < n; i++) {
+		for (int j = i; j > 0 && (out[j]->full.x < out[j - 1]->full.x ||
+				(out[j]->full.x == out[j - 1]->full.x &&
+				 out[j]->full.y < out[j - 1]->full.y)); j--) {
+			struct wh_output *t = out[j];
+			out[j] = out[j - 1];
+			out[j - 1] = t;
+		}
+	}
+	return n;
+}
+
+int wh_output_count(void) {
+	struct wh_output *outs[16];
+	return sorted_outputs(outs, 16);
+}
+
+/* Fills full x,y,w,h then usable x,y,w,h for screen i; 0 on success. */
+int wh_output_info(int i, int *out) {
+	struct wh_output *outs[16];
+	int n = sorted_outputs(outs, 16);
+	if (i < 0 || i >= n) {
+		return -1;
+	}
+	struct wlr_box f = outs[i]->full, u = outs[i]->usable;
+	int v[8] = { f.x, f.y, f.width, f.height, u.x, u.y, u.width, u.height };
+	memcpy(out, v, sizeof(v));
+	return 0;
+}
+
+const char *wh_output_name(int i) {
+	struct wh_output *outs[16];
+	int n = sorted_outputs(outs, 16);
+	return i >= 0 && i < n ? outs[i]->wlr_output->name : NULL;
+}
+
+static struct wh_output_rule *rule_for(struct wlr_output *output) {
+	if (server.output_rules.next == NULL) {
+		return NULL;
+	}
+	struct wh_output_rule *rule;
+	wl_list_for_each(rule, &server.output_rules, link) {
+		if (strcmp(rule->name, output->name) == 0) {
+			return rule;
+		}
+	}
+	return NULL;
+}
+
+/* Scale and position from the config (scale 1, auto position without a
+ * rule). Re-adding to the layout moves an output already in it. */
+static void apply_output_rule(struct wlr_output *output, bool commit_scale) {
+	struct wh_output_rule *rule = rule_for(output);
+	float scale = rule && rule->scale > 0 ? rule->scale : 1.0f;
+	if (commit_scale && output->scale != scale) {
+		struct wlr_output_state state;
+		wlr_output_state_init(&state);
+		wlr_output_state_set_scale(&state, scale);
+		wlr_output_commit_state(output, &state);
+		wlr_output_state_finish(&state);
+	}
+	wlr_xcursor_manager_load(server.cursor_mgr, scale);
+	struct wlr_output_layout_output *l_output = rule && rule->has_position
+		? wlr_output_layout_add(server.output_layout, output, rule->x, rule->y)
+		: wlr_output_layout_add_auto(server.output_layout, output);
+	(void)l_output;
+}
+
+void wh_output_rules_clear(void) {
+	if (server.output_rules.next == NULL) {
+		wl_list_init(&server.output_rules);
+	}
+	struct wh_output_rule *rule, *tmp;
+	wl_list_for_each_safe(rule, tmp, &server.output_rules, link) {
+		wl_list_remove(&rule->link);
+		free(rule->name);
+		free(rule);
+	}
+}
+
+void wh_output_rule_add(const char *name, float scale, int x, int y, int has_position) {
+	if (server.output_rules.next == NULL) {
+		wl_list_init(&server.output_rules);
+	}
+	struct wh_output_rule *rule = calloc(1, sizeof(*rule));
+	rule->name = strdup(name);
+	rule->scale = scale;
+	rule->x = x;
+	rule->y = y;
+	rule->has_position = has_position != 0;
+	wl_list_insert(server.output_rules.prev, &rule->link);
+}
+
+/* Re-apply the rules to every output (after a config reload). */
+void wh_output_rules_apply(void) {
+	if (server.outputs.next == NULL) {
+		return;
+	}
+	struct wh_output *output;
+	wl_list_for_each(output, &server.outputs, link) {
+		apply_output_rule(output->wlr_output, true);
+	}
+	arrange_layers();
 }
 
 static void output_frame(struct wl_listener *listener, void *data) {
@@ -884,11 +1015,23 @@ static void output_request_state(struct wl_listener *listener, void *data) {
 
 static void output_destroy(struct wl_listener *listener, void *data) {
 	struct wh_output *output = wl_container_of(listener, output, destroy);
+	if (server.workspace_group && server.workspace_group_output == output->wlr_output) {
+		wlr_ext_workspace_group_handle_v1_output_leave(server.workspace_group,
+			output->wlr_output);
+		server.workspace_group_output = NULL;
+	}
 	wl_list_remove(&output->frame.link);
 	wl_list_remove(&output->request_state.link);
 	wl_list_remove(&output->destroy.link);
 	wl_list_remove(&output->link);
 	free(output);
+	/* Bars and windows on it move to the outputs that are left. */
+	struct wlr_output *first = first_output();
+	if (server.workspace_group && !server.workspace_group_output && first) {
+		wlr_ext_workspace_group_handle_v1_output_enter(server.workspace_group, first);
+		server.workspace_group_output = first;
+	}
+	arrange_layers();
 }
 
 static void server_new_output(struct wl_listener *listener, void *data) {
@@ -902,6 +1045,10 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	if (mode != NULL) {
 		wlr_output_state_set_mode(&state, mode);
 	}
+	struct wh_output_rule *rule = rule_for(wlr_output);
+	if (rule && rule->scale > 0) {
+		wlr_output_state_set_scale(&state, rule->scale);
+	}
 	wlr_output_commit_state(wlr_output, &state);
 	wlr_output_state_finish(&state);
 
@@ -914,10 +1061,11 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	wl_signal_add(&wlr_output->events.request_state, &output->request_state);
 	output->destroy.notify = output_destroy;
 	wl_signal_add(&wlr_output->events.destroy, &output->destroy);
-	wl_list_insert(&server.outputs, &output->link);
+	wl_list_insert(server.outputs.prev, &output->link);
 
+	apply_output_rule(wlr_output, false);
 	struct wlr_output_layout_output *l_output =
-		wlr_output_layout_add_auto(server.output_layout, wlr_output);
+		wlr_output_layout_get(server.output_layout, wlr_output);
 	struct wlr_scene_output *scene_output =
 		wlr_scene_output_create(server.scene, wlr_output);
 	wlr_scene_output_layout_add_output(server.scene_layout, l_output, scene_output);
@@ -1139,6 +1287,7 @@ static void ensure_workspace_group(void) {
 	server.workspace_group =
 		wlr_ext_workspace_group_handle_v1_create(server.workspace_mgr, 0);
 	wlr_ext_workspace_group_handle_v1_output_enter(server.workspace_group, output);
+	server.workspace_group_output = output;
 	struct wh_workspace *ws;
 	wl_list_for_each(ws, &server.workspaces, link) {
 		wlr_ext_workspace_handle_v1_set_group(ws->handle, server.workspace_group);
@@ -1248,6 +1397,10 @@ static void layer_destroy(struct wl_listener *listener, void *data) {
 
 static void server_new_layer_surface(struct wl_listener *listener, void *data) {
 	struct wlr_layer_surface_v1 *ls = data;
+	if (ls->output == NULL) {
+		ls->output = wlr_output_layout_output_at(server.output_layout,
+			server.cursor->x, server.cursor->y);
+	}
 	if (ls->output == NULL) {
 		ls->output = first_output();
 	}
@@ -1845,6 +1998,9 @@ int wh_init(void) {
 	wl_list_init(&server.views);
 	wl_list_init(&server.outputs);
 	wl_list_init(&server.keyboards);
+	if (server.output_rules.next == NULL) {
+		wl_list_init(&server.output_rules);
+	}
 	if (server.border_width == 0 && server.border_focused[3] == 0) {
 		wh_set_border(2, 0xaa96daff, 0x444444ff);
 	}

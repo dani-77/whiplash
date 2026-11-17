@@ -15,19 +15,15 @@
 #include <stdint.h>
 
 typedef uint32_t wh_view_id;
+typedef void (*wh_void_cb)(void);
 
 /* Callbacks into the brain. */
 typedef void (*wh_view_cb)(wh_view_id id);
 /* Return non-zero when the key was consumed as a compositor binding. */
 typedef int (*wh_key_cb)(uint32_t mods, uint32_t keysym);
-/* The full output box and the part of it left after bars (exclusive
- * layer-shell zones). */
-typedef void (*wh_output_cb)(int x, int y, int width, int height,
-	int ux, int uy, int uwidth, int uheight);
 typedef void (*wh_view_state_cb)(wh_view_id id, int on);
 typedef void (*wh_view_rect_cb)(wh_view_id id, int x, int y, int width, int height);
 typedef void (*wh_workspace_cb)(int tag);
-typedef void (*wh_void_cb)(void);
 
 enum wh_view_mode {
 	WH_VIEW_TILED = 0,
@@ -39,7 +35,9 @@ void wh_on_view_mapped(wh_view_cb cb);
 void wh_on_view_unmapped(wh_view_cb cb);
 void wh_on_view_clicked(wh_view_cb cb);
 void wh_on_key(wh_key_cb cb);
-void wh_on_output(wh_output_cb cb);
+/* Outputs appeared, went away, or changed size, scale or bars: query
+ * them with wh_output_count/wh_output_info. */
+void wh_on_outputs_changed(wh_void_cb cb);
 /* A client asked to enter (on=1) or leave (on=0) fullscreen. */
 void wh_on_view_fullscreen(wh_view_state_cb cb);
 /* mouse_mod + drag started on a view: float it now if it should move. */
@@ -73,6 +71,16 @@ void wh_workspace_add(int tag, const char *name);
 void wh_workspace_set_active(int tag);
 void wh_set_border(int width, uint32_t focused_rgba, uint32_t normal_rgba);
 void wh_spawn(const char *command);
+/* Screens, left to right then top to bottom. wh_output_info fills
+ * out[8] with the full box (x, y, w, h) and the usable box after bars. */
+int wh_output_count(void);
+int wh_output_info(int index, int *out);
+const char *wh_output_name(int index);
+/* Per-output scale and position by connector name (e.g. "eDP-1"). Rules
+ * may be set before wh_init; wh_output_rules_apply re-applies them. */
+void wh_output_rules_clear(void);
+void wh_output_rule_add(const char *name, float scale, int x, int y, int has_position);
+void wh_output_rules_apply(void);
 /* Keyboard settings for physical keyboards; empty strings mean xkb
  * defaults, non-positive repeat values mean 25 Hz / 600 ms. Can be called
  * before wh_init and again at any time. */

@@ -26,6 +26,9 @@ module Whiplash.Core
   , toggleFullscreen
   , setFullscreen
   , floatCentered
+  , focusScreenBy
+  , moveToScreenBy
+  , OutputRule
   , forget
   , withFocused
   , io
@@ -65,14 +68,17 @@ data Config = Config
   , keyboard :: KeyboardSettings
   , keys :: Config -> [((KeyMask, KeySym), X ())]
   , startupHook :: X ()
+  , outputRules :: [OutputRule]
   }
+
+-- | Connector name ("eDP-1"), scale (0 = leave it), optional position.
+type OutputRule = (String, Double, Maybe (Int, Int))
 
 type KeyMap = M.Map (KeyMask, KeySym) (X ())
 
 data WState = WState
   { windowSet :: W.StackSet Int H.ViewId -- ^ layout index per workspace
-  , screen :: Rect -- ^ usable area: the output minus bars
-  , fullRect :: Rect -- ^ the whole output, for fullscreen windows
+  , screens :: [(Rect, Rect)] -- ^ per screen: whole output, usable area (minus bars)
   , ratio :: Double
   , floating :: M.Map H.ViewId Rect -- ^ floating windows and where they sit
   , fullscreen :: S.Set H.ViewId
@@ -114,19 +120,26 @@ refresh = do
   cfg <- getConfig
   st <- getState
   let ws = windowSet st
-      cur = W.currentWorkspace ws
-      wins = maybe [] W.integrate (W.stack cur)
       isFull v = S.member v (fullscreen st)
       floatRect v = M.lookup v (floating st)
-      tiled = [v | v <- wins, not (isFull v), floatRect v == Nothing]
       lays = layouts cfg
-      lay = lays !! (W.layoutIx cur `mod` length lays)
       g = gaps cfg
-      area = shrinkRect g (screen st)
-      placed =
-        [(v, H.Tiled, shrinkRect g r) | (v, r) <- arrange lay (ratio st) area tiled]
-          ++ [(v, H.Floating, r) | v <- wins, not (isFull v), Just r <- [floatRect v]]
-          ++ [(v, H.Fullscreen, fullRect st) | v <- wins, isFull v]
+      -- Each screen shows one workspace, laid out in that screen's area.
+      onScreen (k, tag) = case (drop k (screens st), M.lookup tag (W.workspaces ws)) of
+        ((whole, usable) : _, Just w) ->
+          let here = maybe [] W.integrate (W.stack w)
+              tiled = [v | v <- here, not (isFull v), floatRect v == Nothing]
+              lay = lays !! (W.layoutIx w `mod` length lays)
+              area = shrinkRect g usable
+           in ( here
+              , [(v, H.Tiled, shrinkRect g r) | (v, r) <- arrange lay (ratio st) area tiled]
+                  ++ [(v, H.Floating, r) | v <- here, not (isFull v), Just r <- [floatRect v]]
+                  ++ [(v, H.Fullscreen, whole) | v <- here, isFull v]
+              )
+        _ -> ([], [])
+      shown = map onScreen (M.toList (W.screenTags ws))
+      wins = concatMap fst shown
+      placed = concatMap snd shown
   io $ do
     -- The mode goes first: it decides the border width the geometry uses.
     forM_ placed $ \(v, mode, Rect x y w h) -> do
@@ -146,12 +159,37 @@ floatCentered v = do
   bw <- borderWidth <$> getConfig
   st <- getState
   (nw, nh) <- io (H.naturalSize v)
-  let Rect sx sy sw sh = screen st
+  let Rect sx sy sw sh = focusedArea st
       fit n total fallback = if n <= 0 then fallback else min total (n + 2 * bw)
       w = fit nw sw (sw * 3 `div` 5)
       h = fit nh sh (sh * 3 `div` 5)
       r = Rect (sx + (sw - w) `div` 2) (sy + (sh - h) `div` 2) w h
   modifyState (\s -> s {floating = M.insert v r (floating s)})
+
+-- | The usable area of the focused screen.
+focusedArea :: WState -> Rect
+focusedArea st = case drop (W.focusedScreen (windowSet st)) (screens st) of
+  ((_, usable) : _) -> usable
+  [] -> Rect 0 0 1280 720
+
+-- | Focus the next (+1) or previous (-1) screen.
+focusScreenBy :: Int -> X ()
+focusScreenBy d = do
+  n <- length . screens <$> getState
+  if n < 2
+    then pure ()
+    else windows (\ws -> W.focusScreen ((W.focusedScreen ws + d) `mod` n) ws)
+
+-- | Send the focused window to the workspace on the next/previous screen.
+moveToScreenBy :: Int -> X ()
+moveToScreenBy d = do
+  n <- length . screens <$> getState
+  if n < 2
+    then pure ()
+    else windows $ \ws ->
+      case M.lookup ((W.focusedScreen ws + d) `mod` n) (W.screenTags ws) of
+        Just t -> W.shift t ws
+        Nothing -> ws
 
 -- | Float the focused window, or sink it back into the tiling.
 toggleFloat :: X ()

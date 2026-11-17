@@ -59,6 +59,7 @@ applyToHeart :: Config -> IO ()
 applyToHeart cfg = do
   H.setBorder (borderWidth cfg) (focusedBorderColor cfg) (normalBorderColor cfg)
   H.setMouseMod (modMask cfg)
+  H.setOutputRules (outputRules cfg)
   let kb = keyboard cfg
   H.setKeyboard (kbLayout kb) (kbVariant kb) (kbOptions kb) (kbRepeatRate kb) (kbRepeatDelay kb)
 
@@ -90,8 +91,7 @@ whiplash defaults = do
   keyRef <- newIORef (keyMapOf cfg0)
   stRef <- newIORef WState
     { windowSet = W.new 0 (workspaceTags cfg0)
-    , screen = Rect 0 0 1280 720
-    , fullRect = Rect 0 0 1280 720
+    , screens = []
     , ratio = 0.55
     , floating = M.empty
     , fullscreen = S.empty
@@ -108,6 +108,7 @@ whiplash defaults = do
               writeIORef cfgRef cfg
               writeIORef keyRef (keyMapOf cfg)
               applyToHeart cfg
+              H.applyOutputRules
               hPutStrLn stderr ("whiplash: reloaded " ++ path)
             refresh
       env = XEnv cfgRef keyRef stRef reloadNow
@@ -129,8 +130,12 @@ whiplash defaults = do
   H.onViewMoved $ \v (x, y, w, h) -> run "moved" $
     modifyState (\s -> s {floating = M.adjust (const (Rect x y w h)) v (floating s)})
   H.onWorkspaceActivate $ \t -> run "workspace" (windows (W.view t))
-  H.onOutput $ \(x, y, w, h) (ux, uy, uw, uh) -> run "output" $ do
-    modifyState (\s -> s {fullRect = Rect x y w h, screen = Rect ux uy uw uh})
+  H.onOutputsChanged $ run "outputs" $ do
+    outs <- io H.outputs
+    let rect (x, y, w, h) = Rect x y w h
+        scr = [(rect (H.outputFull o), rect (H.outputUsable o)) | o <- outs]
+    modifyState $ \s ->
+      s {screens = scr, windowSet = W.setScreens (length scr) (windowSet s)}
     refresh
   H.onKey $ \mods sym -> guarded "key" (lookupKey env keyRef mods sym) False
   H.onConfigChanged (run "reload" reloadNow)

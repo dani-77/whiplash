@@ -5,12 +5,15 @@ module Whiplash.Heart
   ( ViewId
   , ViewCallback
   , KeyCallback
-  , OutputCallback
+  , OutputInfo (..)
   , onViewMapped
   , onViewUnmapped
   , onViewClicked
   , onKey
-  , onOutput
+  , onOutputsChanged
+  , outputs
+  , setOutputRules
+  , applyOutputRules
   , onViewFullscreen
   , onViewGrab
   , onViewMoved
@@ -39,23 +42,28 @@ module Whiplash.Heart
   ) where
 
 import Data.Word (Word32)
-import Foreign.C.String (CString, withCString)
-import Foreign.C.Types (CInt (..))
-import Foreign.Ptr (FunPtr)
+import Foreign.C.String (CString, peekCString, withCString)
+import Foreign.C.Types (CFloat (..), CInt (..))
+import Foreign.Marshal.Array (allocaArray, peekArray)
+import Foreign.Ptr (FunPtr, Ptr, nullPtr)
 
 type ViewId = Word32
 
 type ViewCallback = ViewId -> IO ()
 type KeyCallback = Word32 -> Word32 -> IO Bool
--- | Full output box, then the usable box left after bars.
-type OutputCallback = (Int, Int, Int, Int) -> (Int, Int, Int, Int) -> IO ()
+-- | A screen: connector name, full box and the usable box left after bars,
+-- each as (x, y, width, height).
+data OutputInfo = OutputInfo
+  { outputName :: String
+  , outputFull :: (Int, Int, Int, Int)
+  , outputUsable :: (Int, Int, Int, Int)
+  }
 
 data ViewMode = Tiled | Floating | Fullscreen
   deriving (Show, Eq, Enum)
 
 type CViewCb = Word32 -> IO ()
 type CKeyCb = Word32 -> Word32 -> IO CInt
-type COutputCb = CInt -> CInt -> CInt -> CInt -> CInt -> CInt -> CInt -> CInt -> IO ()
 type CStateCb = Word32 -> CInt -> IO ()
 type CRectCb = Word32 -> CInt -> CInt -> CInt -> CInt -> IO ()
 type CTagCb = CInt -> IO ()
@@ -63,7 +71,6 @@ type CVoidCb = IO ()
 
 foreign import ccall "wrapper" mkViewCb :: CViewCb -> IO (FunPtr CViewCb)
 foreign import ccall "wrapper" mkKeyCb :: CKeyCb -> IO (FunPtr CKeyCb)
-foreign import ccall "wrapper" mkOutputCb :: COutputCb -> IO (FunPtr COutputCb)
 foreign import ccall "wrapper" mkStateCb :: CStateCb -> IO (FunPtr CStateCb)
 foreign import ccall "wrapper" mkRectCb :: CRectCb -> IO (FunPtr CRectCb)
 foreign import ccall "wrapper" mkTagCb :: CTagCb -> IO (FunPtr CTagCb)
@@ -73,7 +80,14 @@ foreign import ccall unsafe "wh_on_view_mapped" c_on_view_mapped :: FunPtr CView
 foreign import ccall unsafe "wh_on_view_unmapped" c_on_view_unmapped :: FunPtr CViewCb -> IO ()
 foreign import ccall unsafe "wh_on_view_clicked" c_on_view_clicked :: FunPtr CViewCb -> IO ()
 foreign import ccall unsafe "wh_on_key" c_on_key :: FunPtr CKeyCb -> IO ()
-foreign import ccall unsafe "wh_on_output" c_on_output :: FunPtr COutputCb -> IO ()
+foreign import ccall unsafe "wh_on_outputs_changed" c_on_outputs_changed :: FunPtr CVoidCb -> IO ()
+foreign import ccall unsafe "wh_output_count" c_output_count :: IO CInt
+foreign import ccall unsafe "wh_output_info" c_output_info :: CInt -> Ptr CInt -> IO CInt
+foreign import ccall unsafe "wh_output_name" c_output_name :: CInt -> IO CString
+foreign import ccall unsafe "wh_output_rules_clear" c_output_rules_clear :: IO ()
+foreign import ccall unsafe "wh_output_rule_add" c_output_rule_add
+  :: CString -> CFloat -> CInt -> CInt -> CInt -> IO ()
+foreign import ccall safe "wh_output_rules_apply" c_output_rules_apply :: IO ()
 foreign import ccall unsafe "wh_on_view_fullscreen" c_on_view_fullscreen :: FunPtr CStateCb -> IO ()
 foreign import ccall unsafe "wh_on_view_grab" c_on_view_grab :: FunPtr CRectCb -> IO ()
 foreign import ccall unsafe "wh_on_view_moved" c_on_view_moved :: FunPtr CRectCb -> IO ()
@@ -115,11 +129,39 @@ onKey f = mkKeyCb (\m s -> fromBool <$> f m s) >>= c_on_key
   where
     fromBool b = if b then 1 else 0
 
-onOutput :: OutputCallback -> IO ()
-onOutput f = mkOutputCb cb >>= c_on_output
+onOutputsChanged :: IO () -> IO ()
+onOutputsChanged f = mkVoidCb f >>= c_on_outputs_changed
+
+-- | The screens, left to right then top to bottom.
+outputs :: IO [OutputInfo]
+outputs = do
+  n <- c_output_count
+  fmap concat $ mapM one [0 .. n - 1]
   where
-    cb x y w h ux uy uw uh = f (i x, i y, i w, i h) (i ux, i uy, i uw, i uh)
-    i = fromIntegral
+    one i = allocaArray 8 $ \buf -> do
+      r <- c_output_info i buf
+      if r /= 0
+        then pure []
+        else do
+          vs <- map fromIntegral <$> peekArray 8 buf
+          namePtr <- c_output_name i
+          name <- if namePtr == nullPtr then pure "" else peekCString namePtr
+          case vs of
+            [x, y, w, h, ux, uy, uw, uh] -> pure [OutputInfo name (x, y, w, h) (ux, uy, uw, uh)]
+            _ -> pure []
+
+-- | Per-output (name, scale, position) rules; scale <= 0 leaves it alone.
+setOutputRules :: [(String, Double, Maybe (Int, Int))] -> IO ()
+setOutputRules rules = do
+  c_output_rules_clear
+  mapM_ add rules
+  where
+    add (name, scale, pos) = withCString name $ \n ->
+      let (x, y, has) = maybe (0, 0, 0) (\(a, b) -> (a, b, 1)) pos
+       in c_output_rule_add n (realToFrac scale) (fromIntegral x) (fromIntegral y) has
+
+applyOutputRules :: IO ()
+applyOutputRules = c_output_rules_apply
 
 onViewFullscreen :: (ViewId -> Bool -> IO ()) -> IO ()
 onViewFullscreen f = mkStateCb (\v on -> f v (on /= 0)) >>= c_on_view_fullscreen

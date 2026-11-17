@@ -41,6 +41,15 @@ autostart = [
   "swayidle -w timeout 300 'qsd77 -c utumno locker' timeout 330 \"wlopm --off '*'\" resume \"wlopm --on '*'\" before-sleep 'qsd77 -c utumno locker'",
 ]
 
+# Per-output scale and position, by connector name (see wlr-randr or the
+# log). Outputs without an entry use scale 1, placed left to right.
+# [outputs."eDP-1"]
+# scale = 1.25
+# position = [0, 0]
+#
+# [outputs."HDMI-A-1"]
+# position = [1920, 0]
+
 [keyboard]
 layout = "pt"
 variant = ""
@@ -51,7 +60,7 @@ repeat_delay = 600    # ms before the first repeat
 # Actions: spawn <command>, close, quit, reload, focus-down, focus-up,
 # swap-down, swap-up, swap-master, workspace <n>, move-to-workspace <n>,
 # workspace-previous, layout <name>, next-layout, master-ratio <+/-step>,
-# toggle-float, fullscreen.
+# toggle-float, fullscreen, focus-screen next|prev, move-to-screen next|prev.
 #
 # Keys: a single character ("j", "1", ",") or an xkb key name ("Return",
 # "space", "Tab", "Print", "XF86AudioMute", ...). Modifiers: Mod, Alt, Super,
@@ -94,6 +103,12 @@ repeat_delay = 600    # ms before the first repeat
 "Mod+space" = "next-layout"
 "Mod+Shift+space" = "toggle-float"
 "Mod+e" = "fullscreen"
+
+# Screens (like wasp's focusmon/tagmon)
+"Mod+comma" = "focus-screen prev"
+"Mod+period" = "focus-screen next"
+"Mod+Shift+comma" = "move-to-screen prev"
+"Mod+Shift+period" = "move-to-screen next"
 
 # Session
 "Mod+Shift+c" = "close"

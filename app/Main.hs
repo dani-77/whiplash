@@ -25,6 +25,7 @@ d77Config =
     , keyboard = KeyboardSettings "pt" "" "" 25 600
     , keys = d77Keys
     , startupHook = d77Autostart
+    , outputRules = []
     }
 
 -- | Same session services as wasp's autostart, plus the Utumno shell.

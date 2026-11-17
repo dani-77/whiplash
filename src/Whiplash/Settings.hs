@@ -252,7 +252,7 @@ splitOn c s = case break (== c) s of
 -- | The words a binding can say. Kept next to 'parseAction'.
 actionNames :: [String]
 actionNames =
-  [ "spawn <command>", "close", "quit", "reload"
+  [ "spawn <command>", "terminal", "close", "quit", "reload"
   , "focus-down", "focus-up", "swap-down", "swap-up", "swap-master"
   , "workspace <n>", "move-to-workspace <n>", "workspace-previous"
   , "layout <name>", "next-layout", "master-ratio <+/-delta>"
@@ -265,6 +265,7 @@ parseAction cfg text = case words text of
   ("spawn" : _) -> case dropWhile isSpace (drop 5 (dropWhile isSpace text)) of
     "" -> Left "spawn needs a command"
     cmd -> Right (spawn cmd)
+  ["terminal"] -> Right (spawn (terminal cfg))
   ["close"] -> Right kill
   ["quit"] -> Right quit
   ["reload"] -> Right reload

@@ -1,6 +1,7 @@
 # whiplash configuration
 #
-# Copy to ~/.config/whiplash/config.toml. whiplash reloads it every time it
+# Installed as /usr/share/whiplash/config.toml; copy it to
+# ~/.config/whiplash/config.toml and edit that copy. whiplash reloads it every time it
 # is saved; if the file has an error, the previous config stays active and
 # the error shows up as a notification and in
 # ~/.local/state/whiplash/whiplash.log.
@@ -9,6 +10,7 @@
 # present, replaces the whole default set, so every active binding is listed
 # here.
 
+# Opened by the "terminal" action (Mod+Shift+Return below).
 terminal = "alacritty"
 
 # Modifier that "Mod" stands for in [keybinds]: Alt, Super, Ctrl or Shift.
@@ -68,17 +70,18 @@ speed = 0.0                   # -1 (slow) .. 1 (fast)
 accel_profile = "default"     # default, adaptive or flat
 click_method = "default"      # default, button-areas or clickfinger
 
-# Actions: spawn <command>, close, quit, reload, focus-down, focus-up,
-# swap-down, swap-up, swap-master, workspace <n>, move-to-workspace <n>,
-# workspace-previous, layout <name>, next-layout, master-ratio <+/-step>,
-# toggle-float, fullscreen, focus-screen next|prev, move-to-screen next|prev.
+# Actions: spawn <command>, terminal (the one set above), close, quit,
+# reload, focus-down, focus-up, swap-down, swap-up, swap-master,
+# workspace <n>, move-to-workspace <n>, workspace-previous, layout <name>,
+# next-layout, master-ratio <+/-step>, toggle-float, fullscreen,
+# focus-screen next|prev, move-to-screen next|prev.
 #
 # Keys: a single character ("j", "1", ",") or an xkb key name ("Return",
 # "space", "Tab", "Print", "XF86AudioMute", ...). Modifiers: Mod, Alt, Super,
 # Ctrl, Shift.
 [keybinds]
 # Launchers
-"Mod+Shift+Return" = "spawn alacritty"
+"Mod+Shift+Return" = "terminal"
 "Mod+p" = "spawn wmenu-run"
 
 # D77 (Super)

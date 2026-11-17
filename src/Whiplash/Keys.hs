@@ -15,6 +15,9 @@ module Whiplash.Keys
   , xK_Escape
   , xK_BackSpace
   , xK_Print
+  , xF86AudioRaiseVolume
+  , xF86AudioLowerVolume
+  , xF86AudioMute
   ) where
 
 import Data.Char (ord)
@@ -41,3 +44,8 @@ xK_Tab = 0xff09
 xK_Escape = 0xff1b
 xK_BackSpace = 0xff08
 xK_Print = 0xff61
+
+xF86AudioRaiseVolume, xF86AudioLowerVolume, xF86AudioMute :: KeySym
+xF86AudioRaiseVolume = 0x1008ff13
+xF86AudioLowerVolume = 0x1008ff11
+xF86AudioMute = 0x1008ff12

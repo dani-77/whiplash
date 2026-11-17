@@ -19,6 +19,7 @@ module Whiplash.StackSet
   , swapDown
   , swapMaster
   , view
+  , toggleWS
   , shift
   , modifyLayout
   , allWindows
@@ -39,12 +40,13 @@ data Workspace l a = Workspace
 
 data StackSet l a = StackSet
   { current :: Int
+  , previous :: Int -- ^ last workspace viewed before 'current'
   , workspaces :: M.Map Int (Workspace l a)
   }
   deriving (Show, Eq)
 
 new :: l -> [Int] -> StackSet l a
-new l tags = StackSet first (M.fromList [(t, Workspace t l Nothing) | t <- tags])
+new l tags = StackSet first first (M.fromList [(t, Workspace t l Nothing) | t <- tags])
   where
     first = case tags of
       (t : _) -> t
@@ -127,8 +129,12 @@ focusWindow a s = case stack (currentWorkspace s) of
 
 view :: Int -> StackSet l a -> StackSet l a
 view t s
-  | M.member t (workspaces s) = s {current = t}
+  | t /= current s && M.member t (workspaces s) = s {current = t, previous = current s}
   | otherwise = s
+
+-- | Go back to the previously viewed workspace.
+toggleWS :: StackSet l a -> StackSet l a
+toggleWS s = view (previous s) s
 
 -- | Move the focused window to another workspace (focus stays here).
 shift :: Eq a => Int -> StackSet l a -> StackSet l a
@@ -137,7 +143,7 @@ shift t s = case peek s of
     | t /= current s && M.member t (workspaces s) ->
         let s' = delete a s
             target = view t s'
-         in (insertUp a target) {current = current s}
+         in (insertUp a target) {current = current s, previous = previous s}
   _ -> s
 
 modifyLayout :: (l -> l) -> StackSet l a -> StackSet l a

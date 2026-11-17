@@ -11,6 +11,7 @@ module Whiplash.Core
   , kill
   , quit
   , nextLayout
+  , jumpToLayout
   , incRatio
   , io
   ) where
@@ -104,6 +105,14 @@ quit = io H.heartQuit
 nextLayout :: X ()
 nextLayout = windows (W.modifyLayout (+ 1))
 
+-- | Switch the current workspace to the layout with this name.
+jumpToLayout :: String -> X ()
+jumpToLayout name = do
+  ls <- asks (layouts . xConfig)
+  case lookup name (zip (map layoutName ls) [0 ..]) of
+    Just i -> windows (W.modifyLayout (const i))
+    Nothing -> pure ()
+
 incRatio :: Double -> X ()
 incRatio d = modifyState (\s -> s {ratio = clamp (ratio s + d)}) >> refresh
   where
@@ -120,9 +129,12 @@ guarded what act fallback = handle report act
 whiplash :: Config -> IO ()
 whiplash cfg = do
   args <- getArgs
-  let startupCmd = case args of
-        ["-s", cmd] -> Just cmd
+  -- -s CMD runs CMD after startup; -n skips the startupHook (handy for
+  -- nested or headless test runs that must not start session services).
+  let startupCmd = case dropWhile (/= "-s") args of
+        (_ : cmd : _) -> Just cmd
         _ -> Nothing
+      skipHook = "-n" `elem` args
   ref <- newIORef WState
     { windowSet = W.new 0 (workspaceTags cfg)
     , screen = Rect 0 0 1280 720
@@ -143,7 +155,7 @@ whiplash cfg = do
   H.setBorder (borderWidth cfg) (focusedBorderColor cfg) (normalBorderColor cfg)
   ok <- H.heartInit (keyboardLayout cfg)
   unless ok $ hPutStrLn stderr "whiplash: the heart failed to start" >> exitFailure
-  run "startup" (startupHook cfg)
+  unless skipHook $ run "startup" (startupHook cfg)
   forM_ startupCmd H.spawnCommand
   H.heartRun
   H.heartShutdown

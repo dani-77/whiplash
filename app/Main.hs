@@ -1,17 +1,20 @@
--- | The default whiplash configuration. Like xmonad.hs, a config is just a
+-- | The d77 whiplash configuration. Like xmonad.hs, a config is just a
 -- Haskell program: copy this file, change what you like, rebuild.
+--
+-- Keys follow the wasp config: Alt drives window management, Super opens
+-- the d77 desktop pieces (Utumno through qsd77, d77run).
 module Main (main) where
 
 import Whiplash
 
 main :: IO ()
-main = whiplash defaultConfig
+main = whiplash d77Config
 
-defaultConfig :: Config
-defaultConfig =
+d77Config :: Config
+d77Config =
   Config
     { terminal = "alacritty"
-    , modMask = mod4Mask
+    , modMask = mod1Mask -- Alt, as in wasp
     , borderWidth = 2
     , focusedBorderColor = 0xaa96daff -- d77 lilac
     , normalBorderColor = 0x3b3b4fff
@@ -19,23 +22,62 @@ defaultConfig =
     , layouts = [tall, wide, full]
     , workspaceTags = [1 .. 9]
     , keyboardLayout = Just "pt"
-    , keys = defaultKeys
-    , startupHook = pure ()
+    , keys = d77Keys
+    , startupHook = d77Autostart
     }
 
-defaultKeys :: Config -> [((KeyMask, KeySym), X ())]
-defaultKeys cfg =
-  [ ((m .|. shiftMask, xK_Return), spawn (terminal cfg))
-  , ((m .|. shiftMask, xK 'c'), kill)
-  , ((m, xK_space), nextLayout)
-  , ((m, xK 'j'), windows focusDown)
+-- | Same session services as wasp's autostart, plus the Utumno shell.
+-- swayidle/wlopm are left out until whiplash speaks ext-idle-notify and
+-- output power management.
+d77Autostart :: X ()
+d77Autostart =
+  mapM_
+    spawn
+    [ "awww-daemon"
+    , "/usr/share/quickshell/utumno/wallpaper/set-wallpaper.sh"
+    , "dunst"
+    , "pipewire"
+    , "pipewire-pulse"
+    , "udiskie -a"
+    , "brightnessctl set 50%"
+    , "/usr/libexec/polkit-mate-authentication-agent-1"
+    , "qsd77 run -c utumno"
+    ]
+
+d77Keys :: Config -> [((KeyMask, KeySym), X ())]
+d77Keys cfg =
+  [ -- Launchers
+    ((m .|. shiftMask, xK_Return), spawn (terminal cfg))
+  , ((m, xK 'p'), spawn "wmenu-run")
+  , -- D77 (Super)
+    ((mod4Mask, xK_space), utumno "launcher")
+  , ((mod4Mask, xK 'a'), utumno "ollama")
+  , ((mod4Mask, xK 't'), utumno "locker")
+  , ((mod4Mask, xK 'x'), utumno "session")
+  , ((mod4Mask, xK 'y'), utumno "wallpaper")
+  , ((mod4Mask, xK 'r'), spawn "d77run")
+  , -- Media keys and screenshot
+    ((0, xF86AudioRaiseVolume), spawn "amixer -q set Master 5%+")
+  , ((0, xF86AudioLowerVolume), spawn "amixer -q set Master 5%-")
+  , ((0, xF86AudioMute), spawn "amixer -q set Master toggle")
+  , ((0, xK_Print), spawn "grim ~/screenshot-$(date +%Y%m%d-%H%M%S).png")
+  , -- Window navigation
+    ((m, xK 'j'), windows focusDown)
   , ((m, xK 'k'), windows focusUp)
-  , ((m, xK_Tab), windows focusDown)
+  , ((m, xK_Tab), windows toggleWS)
+  , ((m, xK_Return), windows swapMaster)
   , ((m .|. shiftMask, xK 'j'), windows swapDown)
   , ((m .|. shiftMask, xK 'k'), windows swapUp)
-  , ((m, xK_Return), windows swapMaster)
-  , ((m, xK 'h'), incRatio (-0.05))
+  , -- Resize
+    ((m, xK 'h'), incRatio (-0.05))
   , ((m, xK 'l'), incRatio 0.05)
+  , -- Layouts
+    ((m, xK 't'), jumpToLayout "Tall")
+  , ((m, xK 'w'), jumpToLayout "Wide")
+  , ((m, xK 'm'), jumpToLayout "Full")
+  , ((m, xK_space), nextLayout)
+  , -- Session
+    ((m .|. shiftMask, xK 'c'), kill)
   , ((m .|. shiftMask, xK 'q'), quit)
   ]
     ++ [ ((m .|. extra, xK c), windows (f t))
@@ -44,3 +86,4 @@ defaultKeys cfg =
        ]
   where
     m = modMask cfg
+    utumno action = spawn ("qsd77 -c utumno " ++ action)

@@ -62,6 +62,9 @@ void wh_view_set_visible(wh_view_id id, int visible);
 void wh_view_focus(wh_view_id id); /* 0 clears keyboard focus */
 void wh_view_close(wh_view_id id);
 void wh_view_set_mode(wh_view_id id, int mode); /* enum wh_view_mode */
+/* The app_id of a Wayland window or the WM_CLASS class of an X11 one; ""
+ * when it has none. Valid until the next call into the heart. */
+const char *wh_view_app_id(wh_view_id id);
 int wh_view_wants_float(wh_view_id id);
 int wh_view_natural_width(wh_view_id id);
 int wh_view_natural_height(wh_view_id id);

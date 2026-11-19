@@ -27,6 +27,7 @@ d77Config =
     , keys = d77Keys
     , startupHook = d77Autostart
     , outputRules = []
+    , windowRules = []
     }
 
 -- | Same session services as wasp's autostart, plus the Utumno shell.

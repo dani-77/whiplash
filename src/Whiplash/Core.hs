@@ -33,6 +33,7 @@ module Whiplash.Core
   , focusScreenBy
   , moveToScreenBy
   , OutputRule
+  , WindowRule (..)
   , forget
   , withFocused
   , io
@@ -98,6 +99,14 @@ data Config = Config
   , keys :: Config -> [((KeyMask, KeySym), X ())]
   , startupHook :: X ()
   , outputRules :: [OutputRule]
+  , windowRules :: [(String, WindowRule)] -- ^ by lowercased app_id / X11 class
+  }
+
+-- | What to do with a new window whose app_id (Wayland) or class (X11)
+-- matches. 'Nothing' leaves that part to the usual behaviour.
+data WindowRule = WindowRule
+  { ruleWorkspace :: Maybe Int -- ^ open there, without moving focus
+  , ruleFloat :: Maybe Bool -- ^ float, or tile even a dialog
   }
 
 -- | Connector name ("eDP-1"), scale (0 = leave it), optional position.

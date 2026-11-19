@@ -2061,6 +2061,17 @@ void wh_view_set_mode(wh_view_id id, int mode) {
 	}
 }
 
+const char *wh_view_app_id(wh_view_id id) {
+	struct wh_view *view = view_by_id(id);
+	const char *app_id = NULL;
+	if (view && view->xsurface) {
+		app_id = view->xsurface->class;
+	} else if (view) {
+		app_id = view->xdg_toplevel->app_id;
+	}
+	return app_id ? app_id : "";
+}
+
 int wh_view_wants_float(wh_view_id id) {
 	struct wh_view *view = view_by_id(id);
 	if (!view) {

@@ -141,6 +141,13 @@ The file is watched with inotify on its directory (so editors that save by renam
 temporary file are seen too) and reloaded on every write. A file that fails to parse
 never replaces a working config: the error goes to the log and to `notify-send`.
 
+`[rules."<name>"]` matches a new window's Wayland app_id or X11 `WM_CLASS` class,
+ignoring case (`wh_view_app_id` in the heart). `workspace = n` places it with
+`StackSet.insertOn`, which leaves focus where it is (xmonad's `doShift`); `float`
+overrides the heart's dialog guess either way. Every new window logs its app_id, so
+users can find the name to write. Rules apply on every map, so a window an app hides
+and shows again (Steam from the tray) is placed again.
+
 Bindings see the unshifted (level-0) keysym, so `Mod+Shift+j` uses a lowercase `j` and
 digits stay digits on layouts such as `pt`, where they're shifted symbols.
 
@@ -186,7 +193,7 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
 
 ## Not done yet
 
-- Window rules (app to workspace, float), scratchpad.
+- Scratchpad.
 - Focus-follows-mouse (opt-in), touchpad gestures.
 - Animations, rounded corners, blur.
 - Floating windows keeping their place when their workspace moves to another screen.

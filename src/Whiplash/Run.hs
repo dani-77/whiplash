@@ -9,6 +9,7 @@ module Whiplash.Run
 
 import Control.Exception (SomeException, evaluate, handle, try)
 import Control.Monad (forM_, unless, when)
+import Data.Char (toLower)
 import Data.IORef
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -121,9 +122,15 @@ whiplash defaults = do
       run what act = guarded what (runX env act) ()
 
   H.onViewMapped $ \v -> run "map" $ do
+    app <- io (H.appId v)
+    rules <- windowRules <$> getConfig
+    let rule = lookup (map toLower app) rules
+    -- In the log, so the name for a [rules] entry is easy to find.
+    io $ hPutStrLn stderr ("whiplash: window " ++ show v ++ " app_id " ++ show app
+      ++ maybe "" (const " (rule)") rule)
     dialog <- io (H.wantsFloat v)
-    when dialog (floatCentered v)
-    windows (W.insertUp v)
+    when (maybe dialog id (rule >>= ruleFloat)) (floatCentered v)
+    windows (maybe W.insertUp W.insertOn (rule >>= ruleWorkspace) v)
   H.onViewUnmapped $ \v -> run "unmap" (forget v >> windows (W.delete v))
   H.onViewClicked $ \v -> run "click" (windows (W.focusWindow v))
   H.onViewFullscreen $ \v on -> run "fullscreen" (setFullscreen v on)

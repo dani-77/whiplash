@@ -37,7 +37,7 @@ loadSettings base src = case parseToml src of
 type Result a = Either String a
 
 applySettings :: Config -> Table -> IO (Result Config)
-applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain of
+applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain >>= rules of
   Left err -> pure (Left err)
   Right cfg -> case M.lookup "keybinds" t of
     Nothing -> pure (Right cfg)
@@ -46,7 +46,7 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain of
   where
     topKeys =
       [ "terminal", "mod", "gaps", "border", "layouts", "workspaces"
-      , "keyboard", "touchpad", "autostart", "keybinds", "outputs"
+      , "keyboard", "touchpad", "autostart", "keybinds", "outputs", "rules"
       ]
     plain cfg =
       pure cfg
@@ -60,6 +60,8 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain of
         >>= field "touchpad" (touchpadTable (touchpad cfg)) (\v c -> c {touchpad = v})
         >>= field "autostart" (strList "autostart") (\v c -> c {startupHook = mapM_ spawn v})
         >>= field "outputs" outputTable (\v c -> c {outputRules = v})
+    -- After the plain fields: a rule's workspace must exist.
+    rules cfg = field "rules" (ruleTable (workspaceTags cfg)) (\v c -> c {windowRules = v}) cfg
     field :: String -> (Value -> Result a) -> (a -> Config -> Config) -> Config -> Result Config
     field k decode set c = case M.lookup k t of
       Nothing -> Right c
@@ -183,6 +185,20 @@ touchpadTable tp (VTable t) = do
       Just x -> Right x
       Nothing -> Left ("expected one of " ++ intercalate ", " (map fst opts) ++ ", not " ++ show s)
 touchpadTable _ v = Left ("expected a table, got " ++ typeName v)
+
+-- | [rules."firefox"] with workspace = 2 and/or float = true|false.
+ruleTable :: [Int] -> Value -> Result [(String, WindowRule)]
+ruleTable tags (VTable rs) = mapM one (M.toList rs)
+  where
+    one (name, VTable r) = either (Left . ((name ++ ": ") ++)) Right $ do
+      _ <- checkKeys "" ["workspace", "float"] r ()
+      ws <- maybe (Right Nothing) (fmap Just . workspace) (M.lookup "workspace" r)
+      fl <- maybe (Right Nothing) (fmap Just . bool) (M.lookup "float" r)
+      Right (map toLower name, WindowRule ws fl)
+    one (name, v) = Left (name ++ ": expected a table, got " ++ typeName v)
+    workspace (VInt n) | fromIntegral n `elem` tags = Right (fromIntegral n)
+    workspace v = Left ("no workspace " ++ showValue v)
+ruleTable _ v = Left ("expected a table, got " ++ typeName v)
 
 -- | [outputs."eDP-1"] with scale = 1.5 and/or position = [x, y].
 outputTable :: Value -> Result [OutputRule]

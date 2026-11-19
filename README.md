@@ -33,6 +33,8 @@ The name comes from Metallica's *Whiplash*.
   wrong in a notification.
 - **xmonad-style workspaces and monitors** — up to 9 workspaces shared by all your
   screens; asking for a workspace that's showing on another screen swaps the two.
+- **Window rules** — send an app to its own workspace every time it opens, or make it
+  float (or never float), by its name.
 - **Floating windows** — dialogs float on their own; hold the modifier and drag any
   window with the left button to move it, or with the right button to resize it.
 - **Fullscreen** for videos, games and presentations, on request from the app or with a
@@ -179,6 +181,13 @@ repeat_delay = 600       # ms before a held key starts repeating
 tap = true
 natural_scroll = true
 speed = 0.2              # -1 (slow) .. 1 (fast)
+
+# Window rules, by app name (the log lists the name of every new window)
+[rules."firefox"]
+workspace = 2
+
+[rules."pavucontrol"]
+float = true
 
 [keybinds]
 "Mod+Shift+Return" = "terminal"

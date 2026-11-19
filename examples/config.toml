@@ -70,6 +70,17 @@ speed = 0.0                   # -1 (slow) .. 1 (fast)
 accel_profile = "default"     # default, adaptive or flat
 click_method = "default"      # default, button-areas or clickfinger
 
+# Window rules, by Wayland app_id or X11 window class (case does not
+# matter). Every new window writes its app_id to
+# ~/.local/state/whiplash/whiplash.log, so look there for the name.
+#   workspace = n    open on workspace n; focus stays where it is
+#   float = true     float it; false tiles it even if it is a dialog
+# [rules."firefox"]
+# workspace = 2
+#
+# [rules."pavucontrol"]
+# float = true
+
 # Actions: spawn <command>, terminal (the one set above), close, quit,
 # reload, focus-down, focus-up, swap-down, swap-up, swap-master,
 # workspace <n>, move-to-workspace <n>, workspace-previous, layout <name>,

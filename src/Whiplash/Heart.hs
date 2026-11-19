@@ -20,6 +20,7 @@ module Whiplash.Heart
   , ViewMode (..)
   , setMode
   , wantsFloat
+  , appId
   , naturalSize
   , setMouseMod
   , onWorkspaceActivate
@@ -93,6 +94,7 @@ foreign import ccall unsafe "wh_on_view_fullscreen" c_on_view_fullscreen :: FunP
 foreign import ccall unsafe "wh_on_view_grab" c_on_view_grab :: FunPtr CRectCb -> IO ()
 foreign import ccall unsafe "wh_on_view_moved" c_on_view_moved :: FunPtr CRectCb -> IO ()
 foreign import ccall unsafe "wh_view_set_mode" c_set_mode :: Word32 -> CInt -> IO ()
+foreign import ccall unsafe "wh_view_app_id" c_app_id :: Word32 -> IO CString
 foreign import ccall unsafe "wh_view_wants_float" c_wants_float :: Word32 -> IO CInt
 foreign import ccall unsafe "wh_view_natural_width" c_natural_width :: Word32 -> IO CInt
 foreign import ccall unsafe "wh_view_natural_height" c_natural_height :: Word32 -> IO CInt
@@ -178,6 +180,10 @@ rectCb f v x y w h = f v (fromIntegral x, fromIntegral y, fromIntegral w, fromIn
 
 setMode :: ViewId -> ViewMode -> IO ()
 setMode v m = c_set_mode v (fromIntegral (fromEnum m))
+
+-- | The Wayland app_id, or the X11 window class; "" when there is none.
+appId :: ViewId -> IO String
+appId v = c_app_id v >>= peekCString
 
 -- | Dialogs and fixed-size windows ask to float.
 wantsFloat :: ViewId -> IO Bool

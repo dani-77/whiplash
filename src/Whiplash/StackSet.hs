@@ -11,6 +11,7 @@ module Whiplash.StackSet
   , peek
   , member
   , insertUp
+  , insertOn
   , delete
   , focusUp
   , focusDown
@@ -83,6 +84,14 @@ insertUp :: Eq a => a -> StackSet l a -> StackSet l a
 insertUp a s
   | member a s = s
   | otherwise = modifyCurrent (insertWs a) s
+
+-- | Put a new window on workspace @t@ without moving focus there (like
+-- xmonad's doShift). On the current workspace it is just 'insertUp'.
+insertOn :: Eq a => Int -> a -> StackSet l a -> StackSet l a
+insertOn t a s
+  | member a s = s
+  | t == current s || not (M.member t (workspaces s)) = insertUp a s
+  | otherwise = s {workspaces = M.adjust (insertWs a) t (workspaces s)}
 
 insertWs :: a -> Workspace l a -> Workspace l a
 insertWs a w = w {stack = Just (maybe (Stack [] a []) (\(Stack u f d) -> Stack u a (f : d)) (stack w))}

@@ -100,6 +100,7 @@ data Config = Config
   , startupHook :: X ()
   , outputRules :: [OutputRule]
   , windowRules :: [(String, WindowRule)] -- ^ by lowercased app_id / X11 class
+  , focusFollowsMouse :: Bool -- ^ hovering a window focuses it (no raise)
   }
 
 -- | What to do with a new window whose app_id (Wayland) or class (X11)

@@ -141,6 +141,14 @@ The file is watched with inotify on its directory (so editors that save by renam
 temporary file are seen too) and reloaded on every write. A file that fails to parse
 never replaces a working config: the error goes to the log and to `notify-send`.
 
+Focus-follows-mouse: the heart reports `view_entered` only when real pointer motion
+lands on a different view than the last one (`hover_view`), so a window moving under
+a still pointer never takes focus, and moving inside the focused window after a
+keyboard focus change doesn't steal focus back. Leaving every view (gaps, bars) resets
+`hover_view`. The brain focuses on that event only when `focus_follows_mouse` is on.
+A focus change made during the callback sets `hover_focus`, which skips the raise, so
+hovering never reorders floating windows; clicking still raises.
+
 `[rules."<name>"]` matches a new window's Wayland app_id or X11 `WM_CLASS` class,
 ignoring case (`wh_view_app_id` in the heart). `workspace = n` places it with
 `StackSet.insertOn`, which leaves focus where it is (xmonad's `doShift`); `float`
@@ -194,7 +202,7 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
 ## Not done yet
 
 - Scratchpad.
-- Focus-follows-mouse (opt-in), touchpad gestures.
+- Touchpad gestures.
 - Animations, rounded corners, blur.
 - Floating windows keeping their place when their workspace moves to another screen.
 - An "occupied" hint for bars (ext-workspace has no such state).

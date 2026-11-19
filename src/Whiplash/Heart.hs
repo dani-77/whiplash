@@ -9,6 +9,7 @@ module Whiplash.Heart
   , onViewMapped
   , onViewUnmapped
   , onViewClicked
+  , onViewEntered
   , onKey
   , onOutputsChanged
   , outputs
@@ -81,6 +82,7 @@ foreign import ccall "wrapper" mkVoidCb :: CVoidCb -> IO (FunPtr CVoidCb)
 foreign import ccall unsafe "wh_on_view_mapped" c_on_view_mapped :: FunPtr CViewCb -> IO ()
 foreign import ccall unsafe "wh_on_view_unmapped" c_on_view_unmapped :: FunPtr CViewCb -> IO ()
 foreign import ccall unsafe "wh_on_view_clicked" c_on_view_clicked :: FunPtr CViewCb -> IO ()
+foreign import ccall unsafe "wh_on_view_entered" c_on_view_entered :: FunPtr CViewCb -> IO ()
 foreign import ccall unsafe "wh_on_key" c_on_key :: FunPtr CKeyCb -> IO ()
 foreign import ccall unsafe "wh_on_outputs_changed" c_on_outputs_changed :: FunPtr CVoidCb -> IO ()
 foreign import ccall unsafe "wh_output_count" c_output_count :: IO CInt
@@ -128,6 +130,10 @@ onViewMapped, onViewUnmapped, onViewClicked :: ViewCallback -> IO ()
 onViewMapped f = mkViewCb f >>= c_on_view_mapped
 onViewUnmapped f = mkViewCb f >>= c_on_view_unmapped
 onViewClicked f = mkViewCb f >>= c_on_view_clicked
+
+-- | The pointer moved onto another view (focus-follows-mouse).
+onViewEntered :: ViewCallback -> IO ()
+onViewEntered f = mkViewCb f >>= c_on_view_entered
 
 onKey :: KeyCallback -> IO ()
 onKey f = mkKeyCb (\m s -> fromBool <$> f m s) >>= c_on_key

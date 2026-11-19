@@ -34,6 +34,9 @@ enum wh_view_mode {
 void wh_on_view_mapped(wh_view_cb cb);
 void wh_on_view_unmapped(wh_view_cb cb);
 void wh_on_view_clicked(wh_view_cb cb);
+/* The pointer moved onto another view (not when a view moves under a still
+ * pointer). A focus change made from this callback does not raise. */
+void wh_on_view_entered(wh_view_cb cb);
 void wh_on_key(wh_key_cb cb);
 /* Outputs appeared, went away, or changed size, scale or bars: query
  * them with wh_output_count/wh_output_info. */

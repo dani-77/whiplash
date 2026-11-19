@@ -100,6 +100,10 @@ struct wh_server {
 	struct wlr_layer_surface_v1 *focused_layer;
 	/* Last view the brain focused, restored when a layer lets go. */
 	wh_view_id focused_view;
+	/* The view the pointer last moved onto (0: none), and whether a focus
+	 * change is coming from that move (hover focus never raises). */
+	wh_view_id hover_view;
+	bool hover_focus;
 	struct wl_list output_rules; /* struct wh_output_rule.link */
 	struct wlr_output *workspace_group_output;
 
@@ -333,6 +337,7 @@ static struct wh_server server;
 static wh_view_cb cb_view_mapped;
 static wh_view_cb cb_view_unmapped;
 static wh_view_cb cb_view_clicked;
+static wh_view_cb cb_view_entered;
 static wh_key_cb cb_key;
 static wh_void_cb cb_outputs_changed;
 static wh_view_state_cb cb_view_fullscreen;
@@ -344,6 +349,7 @@ static wh_void_cb cb_config_changed;
 void wh_on_view_mapped(wh_view_cb cb) { cb_view_mapped = cb; }
 void wh_on_view_unmapped(wh_view_cb cb) { cb_view_unmapped = cb; }
 void wh_on_view_clicked(wh_view_cb cb) { cb_view_clicked = cb; }
+void wh_on_view_entered(wh_view_cb cb) { cb_view_entered = cb; }
 void wh_on_key(wh_key_cb cb) { cb_key = cb; }
 void wh_on_outputs_changed(wh_void_cb cb) { cb_outputs_changed = cb; }
 void wh_on_view_fullscreen(wh_view_state_cb cb) { cb_view_fullscreen = cb; }
@@ -834,6 +840,18 @@ static void process_cursor_motion(uint32_t time) {
 		&surface, &sx, &sy);
 	if (!view) {
 		wlr_cursor_set_xcursor(server.cursor, server.cursor_mgr, "default");
+	}
+	/* Only real motion reports a new view: a window moving under a still
+	 * pointer (a layout change) never takes focus. Leaving every view (gaps,
+	 * bars) resets it, so coming back onto the same window counts again. */
+	wh_view_id hovered = view && view->mapped && !server.locked ? view->id : 0;
+	if (hovered != server.hover_view) {
+		server.hover_view = hovered;
+		if (hovered && hovered != server.focused_view && cb_view_entered) {
+			server.hover_focus = true;
+			cb_view_entered(hovered);
+			server.hover_focus = false;
+		}
 	}
 	if (surface) {
 		wlr_seat_pointer_notify_enter(server.seat, surface, sx, sy);
@@ -2156,7 +2174,9 @@ void wh_view_focus(wh_view_id id) {
 		wlr_seat_keyboard_notify_clear_focus(seat);
 		return;
 	}
-	wlr_scene_node_raise_to_top(&view->container->node);
+	if (!server.hover_focus) {
+		wlr_scene_node_raise_to_top(&view->container->node);
+	}
 	view_set_activated(view, true);
 	struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(seat);
 	if (keyboard != NULL) {

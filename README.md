@@ -35,6 +35,8 @@ The name comes from Metallica's *Whiplash*.
   screens; asking for a workspace that's showing on another screen swaps the two.
 - **Window rules** — send an app to its own workspace every time it opens, or make it
   float (or never float), by its name.
+- **Focus follows the mouse**, if you want it — point at a window to type into it,
+  no click needed. Off by default; turn it on with `focus_follows_mouse = true`.
 - **Floating windows** — dialogs float on their own; hold the modifier and drag any
   window with the left button to move it, or with the right button to resize it.
 - **Fullscreen** for videos, games and presentations, on request from the app or with a
@@ -161,6 +163,7 @@ default. A few of the things you can set:
 terminal = "foot"
 mod = "Super"            # Alt, Super, Ctrl or Shift
 gaps = 4
+focus_follows_mouse = true   # point at a window to focus it
 layouts = ["tall", "wide", "full"]
 border = { width = 2, focused = "#aa96da", normal = "#3b3b4f" }
 

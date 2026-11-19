@@ -133,6 +133,9 @@ whiplash defaults = do
     windows (maybe W.insertUp W.insertOn (rule >>= ruleWorkspace) v)
   H.onViewUnmapped $ \v -> run "unmap" (forget v >> windows (W.delete v))
   H.onViewClicked $ \v -> run "click" (windows (W.focusWindow v))
+  H.onViewEntered $ \v -> run "enter" $ do
+    on <- focusFollowsMouse <$> getConfig
+    when on (windows (W.focusWindow v))
   H.onViewFullscreen $ \v on -> run "fullscreen" (setFullscreen v on)
   -- Mod+drag on a tiled window floats it where it stands, like xmonad.
   H.onViewGrab $ \v (x, y, w, h) -> run "grab" $ do

@@ -19,6 +19,9 @@ mod = "Alt"
 
 gaps = 4
 
+# Hovering a window focuses it (it is not raised; clicking still raises).
+focus_follows_mouse = false
+
 # Layouts in the order Mod+space cycles through: tall, wide, full.
 layouts = ["tall", "wide", "full"]
 

@@ -45,7 +45,7 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain >>= r
     Just v -> pure (Left ("keybinds must be a table, not " ++ typeName v))
   where
     topKeys =
-      [ "terminal", "mod", "gaps", "border", "layouts", "workspaces"
+      [ "terminal", "mod", "gaps", "border", "layouts", "workspaces", "focus_follows_mouse"
       , "keyboard", "touchpad", "autostart", "keybinds", "outputs", "rules"
       ]
     plain cfg =
@@ -53,6 +53,7 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain >>= r
         >>= field "terminal" str (\v c -> c {terminal = v})
         >>= field "mod" modifier (\v c -> c {modMask = v})
         >>= field "gaps" (nat "gaps") (\v c -> c {gaps = v})
+        >>= field "focus_follows_mouse" bool (\v c -> c {focusFollowsMouse = v})
         >>= field "border" border id
         >>= field "layouts" layoutList (\v c -> c {layouts = v})
         >>= field "workspaces" workspaces (\v c -> c {workspaceTags = v})

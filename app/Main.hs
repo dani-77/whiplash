@@ -28,6 +28,7 @@ d77Config =
     , startupHook = d77Autostart
     , outputRules = []
     , windowRules = []
+    , focusFollowsMouse = False
     }
 
 -- | Same session services as wasp's autostart, plus the Utumno shell.

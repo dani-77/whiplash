@@ -21,6 +21,15 @@ typedef void (*wh_void_cb)(void);
 typedef void (*wh_view_cb)(wh_view_id id);
 /* Return non-zero when the key was consumed as a compositor binding. */
 typedef int (*wh_key_cb)(uint32_t mods, uint32_t keysym);
+/* Touchpad swipes. Called with WH_SWIPE_QUERY when a swipe starts: return
+ * nonzero to take it (it is then hidden from clients), 0 to pass it on.
+ * A swipe taken is reported once more when it ends, with its direction,
+ * unless it was cancelled or too short. */
+enum wh_swipe_direction {
+	WH_SWIPE_QUERY = -1,
+	WH_SWIPE_LEFT, WH_SWIPE_RIGHT, WH_SWIPE_UP, WH_SWIPE_DOWN,
+};
+typedef int (*wh_swipe_cb)(int fingers, int direction);
 typedef void (*wh_view_state_cb)(wh_view_id id, int on);
 typedef void (*wh_view_rect_cb)(wh_view_id id, int x, int y, int width, int height);
 typedef void (*wh_workspace_cb)(int tag);
@@ -38,6 +47,7 @@ void wh_on_view_clicked(wh_view_cb cb);
  * pointer). A focus change made from this callback does not raise. */
 void wh_on_view_entered(wh_view_cb cb);
 void wh_on_key(wh_key_cb cb);
+void wh_on_swipe(wh_swipe_cb cb);
 /* Outputs appeared, went away, or changed size, scale or bars: query
  * them with wh_output_count/wh_output_info. */
 void wh_on_outputs_changed(wh_void_cb cb);

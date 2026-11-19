@@ -39,6 +39,8 @@ The name comes from Metallica's *Whiplash*.
   no click needed. Off by default; turn it on with `focus_follows_mouse = true`.
 - **Scratchpads** — a drop-down terminal (or any app) that one key shows and hides,
   without closing it, wherever you are.
+- **Touchpad gestures** — swipe with three fingers to change workspace, or bind any
+  swipe to anything a key can do. Pinch zoom and other gestures still reach your apps.
 - **Floating windows** — dialogs float on their own; hold the modifier and drag any
   window with the left button to move it, or with the right button to resize it.
 - **Fullscreen** for videos, games and presentations, on request from the app or with a
@@ -198,6 +200,11 @@ float = true
 [scratchpads."term"]
 command = "foot --app-id scratch-term"
 app_id = "scratch-term"
+
+# Three-finger swipes change workspace
+[gestures]
+"3-left" = "workspace-prev"
+"3-right" = "workspace-next"
 
 [keybinds]
 "Mod+backslash" = "toggle-scratchpad term"

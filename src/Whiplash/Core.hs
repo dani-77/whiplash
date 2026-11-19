@@ -36,6 +36,7 @@ module Whiplash.Core
   , WindowRule (..)
   , Scratchpad (..)
   , toggleScratchpad
+  , cycleWorkspace
   , captureScratchpad
   , forget
   , withFocused
@@ -105,6 +106,7 @@ data Config = Config
   , windowRules :: [(String, WindowRule)] -- ^ by lowercased app_id / X11 class
   , focusFollowsMouse :: Bool -- ^ hovering a window focuses it (no raise)
   , scratchpads :: [(String, Scratchpad)] -- ^ by slot name
+  , gestures :: [((Int, Int), X ())] -- ^ (fingers, direction 0-3: left right up down)
   }
 
 -- | A named scratchpad slot: a floating window shown and hidden with one
@@ -269,6 +271,15 @@ forget v = modifyState $ \s ->
     , fullscreen = S.delete v (fullscreen s)
     , scratch = M.filter (/= v) (scratch s)
     }
+
+-- | The next (+1) or previous (-1) workspace, wrapping (9 -> 1, 1 -> 9).
+cycleWorkspace :: Int -> X ()
+cycleWorkspace d = do
+  tags <- workspaceTags <$> getConfig
+  cur <- W.current . windowSet <$> getState
+  case lookup cur (zip tags [0 ..]) of
+    Nothing -> pure ()
+    Just i -> windows (W.view (tags !! ((i + d) `mod` length tags)))
 
 -- | Show or hide a scratchpad slot. Empty slot: run its command (the
 -- window is caught on map). Shown on the current workspace: hide it, out

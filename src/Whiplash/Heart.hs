@@ -11,6 +11,7 @@ module Whiplash.Heart
   , onViewClicked
   , onViewEntered
   , onKey
+  , onSwipe
   , onOutputsChanged
   , outputs
   , setOutputRules
@@ -67,6 +68,7 @@ data ViewMode = Tiled | Floating | Fullscreen
 
 type CViewCb = Word32 -> IO ()
 type CKeyCb = Word32 -> Word32 -> IO CInt
+type CSwipeCb = CInt -> CInt -> IO CInt
 type CStateCb = Word32 -> CInt -> IO ()
 type CRectCb = Word32 -> CInt -> CInt -> CInt -> CInt -> IO ()
 type CTagCb = CInt -> IO ()
@@ -74,6 +76,8 @@ type CVoidCb = IO ()
 
 foreign import ccall "wrapper" mkViewCb :: CViewCb -> IO (FunPtr CViewCb)
 foreign import ccall "wrapper" mkKeyCb :: CKeyCb -> IO (FunPtr CKeyCb)
+foreign import ccall "wrapper" mkSwipeCb :: CSwipeCb -> IO (FunPtr CSwipeCb)
+foreign import ccall unsafe "wh_on_swipe" c_on_swipe :: FunPtr CSwipeCb -> IO ()
 foreign import ccall "wrapper" mkStateCb :: CStateCb -> IO (FunPtr CStateCb)
 foreign import ccall "wrapper" mkRectCb :: CRectCb -> IO (FunPtr CRectCb)
 foreign import ccall "wrapper" mkTagCb :: CTagCb -> IO (FunPtr CTagCb)
@@ -134,6 +138,12 @@ onViewClicked f = mkViewCb f >>= c_on_view_clicked
 -- | The pointer moved onto another view (focus-follows-mouse).
 onViewEntered :: ViewCallback -> IO ()
 onViewEntered f = mkViewCb f >>= c_on_view_entered
+
+-- | Touchpad swipes: called with direction -1 when a swipe starts (answer
+-- True to take it from clients), then with 0 left, 1 right, 2 up, 3 down
+-- when a taken swipe ends.
+onSwipe :: (Int -> Int -> IO Bool) -> IO ()
+onSwipe f = mkSwipeCb (\n d -> (\b -> if b then 1 else 0) <$> f (fromIntegral n) (fromIntegral d)) >>= c_on_swipe
 
 onKey :: KeyCallback -> IO ()
 onKey f = mkKeyCb (\m s -> fromBool <$> f m s) >>= c_on_key

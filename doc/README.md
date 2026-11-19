@@ -110,7 +110,8 @@ WAYLAND_DISPLAY=wayland-N grim -s 0.5 shot.png       # capture
   clients drop their own shadows), wlr-layer-shell (bars, launchers, menus; popups
   included), XWayland (managed and override-redirect windows).
 - **Input:** physical and virtual keyboards (`wtype`), virtual pointer (`wlrctl`),
-  cursor-shape, libinput touchpad settings. Ctrl+Alt+F1..F12 is handled in C before the
+  cursor-shape, libinput touchpad settings, pointer-gestures-v1 (unbound swipes,
+  pinches and holds reach clients). Ctrl+Alt+F1..F12 is handled in C before the
   brain sees the key, so a broken config can't trap the user.
 - **Workspaces:** ext-workspace-v1, so bars can show and switch them.
 - **Session:** ext-session-lock-v1 (if the locker dies, the session stays locked;
@@ -140,6 +141,14 @@ Unknown keys and unknown actions are errors.
 The file is watched with inotify on its directory (so editors that save by renaming a
 temporary file are seen too) and reloaded on every write. A file that fails to parse
 never replaces a working config: the error goes to the log and to `notify-send`.
+
+Touchpad gestures: at `swipe_begin` the heart asks the brain (`wh_on_swipe` with
+`WH_SWIPE_QUERY`) whether any `[gestures]` entry uses that many fingers. If so the
+swipe is the compositor's: deltas are summed, and at `swipe_end` the dominant axis
+picks the direction, ignoring cancelled swipes and ones shorter than `WH_SWIPE_MIN`.
+Otherwise the whole swipe, like every pinch and hold, is forwarded to clients through
+pointer-gestures-v1. Gestures can't be driven headless; the config parsing and the
+`workspace-next`/`workspace-prev` actions can.
 
 Scratchpads live entirely in the brain. `WState.scratch` maps a slot name to its
 view. A new window whose app_id matches a slot that has no window yet is caught
@@ -209,7 +218,6 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
 
 ## Not done yet
 
-- Touchpad gestures.
 - Animations, rounded corners, blur.
 - Floating windows keeping their place when their workspace moves to another screen.
 - An "occupied" hint for bars (ext-workspace has no such state).

@@ -96,12 +96,21 @@ click_method = "default"      # default, button-areas or clickfinger
 # width = 0.6
 # height = 0.6
 
+# Touchpad swipes: "<fingers>-<direction>" = "<action>", with 3 to 5
+# fingers and left, right, up or down; any action from [keybinds] works.
+# Swipes with a finger count bound here are taken by whiplash; the rest,
+# and pinch zoom, go to the app under the pointer.
+[gestures]
+"3-left" = "workspace-prev"
+"3-right" = "workspace-next"
+# "4-up" = "fullscreen"
+
 # Actions: spawn <command>, terminal (the one set above), close, quit,
 # reload, focus-down, focus-up, swap-down, swap-up, swap-master,
 # workspace <n>, move-to-workspace <n>, workspace-previous, layout <name>,
 # next-layout, master-ratio <+/-step>, toggle-float, fullscreen,
 # focus-screen next|prev, move-to-screen next|prev,
-# toggle-scratchpad <name>.
+# toggle-scratchpad <name>, workspace-next, workspace-prev (wrapping).
 #
 # Keys: a single character ("j", "1", ",") or an xkb key name ("Return",
 # "space", "Tab", "Print", "XF86AudioMute", ...). Modifiers: Mod, Alt, Super,

@@ -37,7 +37,7 @@ loadSettings base src = case parseToml src of
 type Result a = Either String a
 
 applySettings :: Config -> Table -> IO (Result Config)
-applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain >>= rules of
+applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain >>= rules >>= swipes of
   Left err -> pure (Left err)
   Right cfg -> case M.lookup "keybinds" t of
     Nothing -> pure (Right cfg)
@@ -46,7 +46,7 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain >>= r
   where
     topKeys =
       [ "terminal", "mod", "gaps", "border", "layouts", "workspaces", "focus_follows_mouse"
-      , "keyboard", "touchpad", "autostart", "keybinds", "outputs", "rules", "scratchpads"
+      , "keyboard", "touchpad", "autostart", "keybinds", "outputs", "rules", "scratchpads", "gestures"
       ]
     plain cfg =
       pure cfg
@@ -64,6 +64,8 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain >>= r
         >>= field "outputs" outputTable (\v c -> c {outputRules = v})
     -- After the plain fields: a rule's workspace must exist.
     rules cfg = field "rules" (ruleTable (workspaceTags cfg)) (\v c -> c {windowRules = v}) cfg
+    -- Also after the plain fields: actions refer to workspaces and slots.
+    swipes cfg = field "gestures" (gestureTable cfg) (\v c -> c {gestures = v}) cfg
     field :: String -> (Value -> Result a) -> (a -> Config -> Config) -> Config -> Result Config
     field k decode set c = case M.lookup k t of
       Nothing -> Right c
@@ -206,6 +208,23 @@ scratchpadTable (VTable ps) = mapM one (M.toList ps)
     fraction what v = Left (what ++ " must be between 0.1 and 1, got " ++ showValue v)
 scratchpadTable v = Left ("expected a table, got " ++ typeName v)
 
+-- | [gestures] with "3-left" = "<action>": fingers (3-5) and a direction.
+gestureTable :: Config -> Value -> Result [((Int, Int), X ())]
+gestureTable cfg (VTable gs) = mapM one (M.toList gs)
+  where
+    one (k, v) = either (Left . (show k ++) . (": " ++)) Right $ do
+      key <- case break (== '-') k of
+        (n, '-' : dir) -> (,) <$> fingers n <*> direction (map toLower dir)
+        _ -> Left "write it as <fingers>-<direction>, e.g. \"3-left\""
+      act <- str v >>= parseAction cfg
+      Right (key, act)
+    fingers n = case readMaybe n of
+      Just f | f >= 3 && f <= 5 -> Right f
+      _ -> Left "swipes use 3 to 5 fingers (2 fingers scroll)"
+    direction d = maybe (Left ("unknown direction " ++ show d ++ " (left, right, up, down)")) Right
+      (lookup d (zip ["left", "right", "up", "down"] [0 ..]))
+gestureTable _ v = Left ("expected a table, got " ++ typeName v)
+
 -- | [rules."firefox"] with workspace = 2 and/or float = true|false.
 ruleTable :: [Int] -> Value -> Result [(String, WindowRule)]
 ruleTable tags (VTable rs) = mapM one (M.toList rs)
@@ -294,7 +313,7 @@ actionNames =
   , "layout <name>", "next-layout", "master-ratio <+/-delta>"
   , "toggle-float", "fullscreen"
   , "focus-screen next|prev", "move-to-screen next|prev"
-  , "toggle-scratchpad <name>"
+  , "toggle-scratchpad <name>", "workspace-next", "workspace-prev"
   ]
 
 parseAction :: Config -> String -> Result (X ())
@@ -326,6 +345,8 @@ parseAction cfg text = case words text of
   ["move-to-screen", dir] -> moveToScreenBy <$> direction dir
   ["toggle-float"] -> Right toggleFloat
   ["fullscreen"] -> Right toggleFullscreen
+  ["workspace-next"] -> Right (cycleWorkspace 1)
+  ["workspace-prev"] -> Right (cycleWorkspace (-1))
   ["toggle-scratchpad", name]
     | name `elem` map fst (scratchpads cfg) -> Right (toggleScratchpad name)
     | otherwise -> Left ("no scratchpad " ++ show name ++ " in [scratchpads]")

@@ -164,6 +164,14 @@ whiplash defaults = do
       s {screens = scr, windowSet = W.setScreens (length scr) (windowSet s)}
     refresh
   H.onKey $ \mods sym -> guarded "key" (lookupKey env keyRef mods sym) False
+  -- A swipe is taken from clients only when its finger count is bound.
+  H.onSwipe $ \n d -> guarded "swipe" (do
+    gs <- gestures <$> readIORef cfgRef
+    if d < 0
+      then pure (any ((== n) . fst . fst) gs)
+      else do
+        forM_ (lookup (n, d) gs) (runX env)
+        pure True) False
   H.onConfigChanged (run "reload" reloadNow)
 
   applyToHeart cfg0

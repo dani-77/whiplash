@@ -2341,6 +2341,11 @@ void wh_spawn(const char *command) {
 	 * zombie of the compositor. */
 	pid_t pid = fork();
 	if (pid == 0) {
+		/* SIGTERM/SIGINT are blocked here for the event loop's signalfd;
+		 * programs must not inherit that, or they would ignore them. */
+		sigset_t none;
+		sigemptyset(&none);
+		sigprocmask(SIG_SETMASK, &none, NULL);
 		setsid();
 		if (fork() == 0) {
 			execl("/bin/sh", "/bin/sh", "-c", command, (void *)NULL);
@@ -2396,6 +2401,11 @@ int wh_watch_config(const char *dir, const char *name) {
 }
 
 /* ---- lifecycle ---------------------------------------------------------- */
+
+static int handle_stop_signal(int signal, void *data) {
+	wl_display_terminate(server.wl_display);
+	return 0;
+}
 
 int wh_init(void) {
 	wlr_log_init(WLR_INFO, NULL);
@@ -2595,12 +2605,20 @@ int wh_init(void) {
 		wlr_backend_destroy(server.backend);
 		return 1;
 	}
+	/* Before the backend starts: outputs appear inside wlr_backend_start and
+	 * the brain already runs then, so nothing it does may see the parent
+	 * session's WAYLAND_DISPLAY (it names files after it). */
+	setenv("WAYLAND_DISPLAY", server.socket, true);
+	/* SIGTERM (the greeter ending the session) and SIGINT stop the loop, so
+	 * the shutdown path runs and cleans up after itself. */
+	struct wl_event_loop *loop = wl_display_get_event_loop(server.wl_display);
+	wl_event_loop_add_signal(loop, SIGTERM, handle_stop_signal, NULL);
+	wl_event_loop_add_signal(loop, SIGINT, handle_stop_signal, NULL);
 	if (!wlr_backend_start(server.backend)) {
 		wlr_backend_destroy(server.backend);
 		wl_display_destroy(server.wl_display);
 		return 1;
 	}
-	setenv("WAYLAND_DISPLAY", server.socket, true);
 	wlr_log(WLR_INFO, "whiplash running on WAYLAND_DISPLAY=%s", server.socket);
 	return 0;
 }

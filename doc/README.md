@@ -162,6 +162,28 @@ is on, keeping its offset from that screen's corner, or centred when it is on no
 (`floatMoved`, at the end of a drag) moves it to the workspace shown there, as in
 xmonad, so it doesn't jump back. Dragging can't be driven headless.
 
+### Occupied workspaces: `d77-workspaces-$WAYLAND_DISPLAY`
+
+ext-workspace-v1 has no "occupied" state, so the d77 compositors (whiplash, wasp,
+spitfire) publish it the same way for the d77 shells (Utumno, quickshell-d77,
+fabric-d77, helium-d77). The file is `$XDG_RUNTIME_DIR/d77-workspaces-$WAYLAND_DISPLAY`,
+with one line per workspace:
+
+```
+<ext-workspace id> <number of windows>
+```
+
+The id is the one the compositor sends in ext-workspace's `id` event
+(`whiplash-<n>` here), so a shell matches each workspace it shows without knowing
+output names. The brain rewrites the file only when a count changes, writing beside
+it and renaming so readers never see half a file, and removes it on exit. Hidden
+scratchpads are not counted. A shell that finds no file keeps its old behaviour.
+
+`WAYLAND_DISPLAY` is set before the backend starts: outputs appear inside
+`wlr_backend_start` and the brain already runs then, so it must never see the parent
+session's value. SIGTERM and SIGINT stop the event loop, so the shutdown path runs;
+they are blocked for the loop's signalfd, and `wh_spawn` unblocks them in children.
+
 Scratchpads live entirely in the brain. `WState.scratch` maps a slot name to its
 view. A new window whose app_id matches a slot that has no window yet is caught
 (`captureScratchpad`) before the window rules run. Hiding a scratchpad deletes it from

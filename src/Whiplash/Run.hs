@@ -7,13 +7,13 @@ module Whiplash.Run
   , configPath
   ) where
 
-import Control.Exception (SomeException, evaluate, handle, try)
+import Control.Exception (IOException, SomeException, catch, evaluate, handle, try)
 import Control.Monad (forM_, unless, when)
 import Data.Char (toLower)
 import Data.IORef
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable)
+import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable, removeFile)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
@@ -117,6 +117,7 @@ whiplash defaults = do
     , fullscreen = S.empty
     , scratch = M.empty
     , urgent = S.empty
+    , published = ""
     }
   let reloadNow = do
         old <- getConfig
@@ -193,6 +194,8 @@ whiplash defaults = do
   forM_ startupCmd H.spawnCommand
   H.heartRun
   H.heartShutdown
+  -- Bars must not read a stale file after the session ends.
+  workspacesFile >>= mapM_ (\p -> removeFile p `catch` \e -> const (pure ()) (e :: IOException))
   where
     lookupKey env keyRef mods sym = do
       km <- readIORef keyRef

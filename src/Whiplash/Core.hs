@@ -18,6 +18,7 @@ module Whiplash.Core
   , getState
   , modifyState
   , refresh
+  , workspacesFile
   , windows
   , spawn
   , kill
@@ -53,6 +54,8 @@ import Data.List ((\\))
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
+import System.Directory (renameFile)
+import System.Environment (lookupEnv)
 
 import qualified Whiplash.Heart as H
 import Whiplash.Keys
@@ -141,6 +144,7 @@ data WState = WState
   , fullscreen :: S.Set H.ViewId
   , scratch :: M.Map String H.ViewId -- ^ slot name -> its window, shown or hidden
   , urgent :: S.Set H.ViewId -- ^ windows asking for attention, until focused
+  , published :: String -- ^ last contents of 'workspacesFile', to skip rewrites
   }
 
 -- | The config can change at runtime (hot reload), so it lives in an
@@ -213,6 +217,7 @@ refresh = do
     H.setActiveWorkspace (W.current ws)
     let urgentTags = [t | v <- S.toList (urgent st), Just t <- [W.findTag v ws]]
     forM_ (M.keys (W.workspaces ws)) $ \t -> H.setWorkspaceUrgent t (t `elem` urgentTags)
+  publishWorkspaces
 
 -- | Floating windows belong to their workspace, not to a screen: when a
 -- workspace is shown on another screen (greedy view, a monitor unplugged),
@@ -260,6 +265,33 @@ floatMoved v r@(Rect x y w h) = do
   case (target, W.findTag v ws) of
     (t : _, Just from) | t /= from -> windows (W.focusWindow v . W.shiftWin t v)
     _ -> pure ()
+
+-- | Where bars read how many windows each workspace holds, a d77 convention
+-- shared with wasp and spitfire (ext-workspace has no "occupied" state):
+-- one line per workspace, "<ext-workspace id> <window count>".
+workspacesFile :: IO (Maybe FilePath)
+workspacesFile = do
+  dir <- lookupEnv "XDG_RUNTIME_DIR"
+  disp <- lookupEnv "WAYLAND_DISPLAY"
+  pure $ case (dir, disp) of
+    (Just d, Just w) | not (null d), not (null w) -> Just (d ++ "/d77-workspaces-" ++ w)
+    _ -> Nothing
+
+-- | Rewrite 'workspacesFile' when a workspace gains or loses windows.
+-- Written beside it and renamed, so readers never see half a file. The
+-- ids match the heart's ext-workspace ids ("whiplash-<n>").
+publishWorkspaces :: X ()
+publishWorkspaces = do
+  st <- getState
+  let ws = W.workspaces (windowSet st)
+      body = concat [ "whiplash-" ++ show t ++ " " ++ show (length (maybe [] W.integrate (W.stack w))) ++ "\n"
+                    | (t, w) <- M.toList ws ]
+  unless (body == published st) $ do
+    path <- io workspacesFile
+    -- Only what was really written counts as published.
+    forM_ path $ \p -> do
+      io $ writeFile (p ++ ".new") body >> renameFile (p ++ ".new") p
+      modifyState (\s -> s {published = body})
 
 withFocused :: (H.ViewId -> X ()) -> X ()
 withFocused f = getState >>= maybe (pure ()) f . W.peek . windowSet

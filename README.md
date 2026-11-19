@@ -47,6 +47,8 @@ The name comes from Metallica's *Whiplash*.
   and a playing video keeps that from happening.
 - **Screenshots and screen sharing** — grim and friends work, and so does sharing your
   screen in a browser or video call.
+- **Monitors and night light** — set up screens on the fly with wlr-randr, kanshi or
+  wdisplays, and warm the colors at night with wlsunset or gammastep.
 - **Runs your existing Linux apps**, X11 ones included, through XWayland.
 - Works as a real login-screen session (greetd, SDDM, GDM, ...) or nested inside your
   current desktop for trying it out first.

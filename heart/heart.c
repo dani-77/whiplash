@@ -34,6 +34,7 @@
 #include <wlr/types/wlr_export_dmabuf_v1.h>
 #include <wlr/types/wlr_ext_workspace_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
+#include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
 #include <wlr/types/wlr_idle_notify_v1.h>
 #include <wlr/types/wlr_input_device.h>
@@ -41,6 +42,7 @@
 #include <wlr/types/wlr_layer_shell_v1.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
+#include <wlr/types/wlr_output_management_v1.h>
 #include <wlr/types/wlr_output_power_management_v1.h>
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_primary_selection.h>
@@ -172,6 +174,11 @@ struct wh_server {
 	struct wlr_output_layout *output_layout;
 	struct wl_list outputs;
 	struct wl_listener new_output;
+	struct wl_listener layout_change;
+	/* wlr-output-management (wlr-randr, kanshi, wdisplays). */
+	struct wlr_output_manager_v1 *output_mgr;
+	struct wl_listener output_mgr_apply;
+	struct wl_listener output_mgr_test;
 
 	const char *socket;
 	/* Keyboard settings for physical keyboards (wh_set_keyboard). */
@@ -196,6 +203,9 @@ struct wh_output {
 	struct wlr_output *wlr_output;
 	/* Layout box, and what is left of it after bars (exclusive zones). */
 	struct wlr_box full, usable;
+	/* Turned off through output management: out of the layout until a
+	 * client turns it back on. (wlopm only blanks it and keeps it.) */
+	bool disabled;
 	struct wl_listener frame;
 	struct wl_listener request_state;
 	struct wl_listener destroy;
@@ -1098,7 +1108,9 @@ void wh_output_rules_apply(void) {
 	}
 	struct wh_output *output;
 	wl_list_for_each(output, &server.outputs, link) {
-		apply_output_rule(output->wlr_output, true);
+		if (!output->disabled) {
+			apply_output_rule(output->wlr_output, true);
+		}
 	}
 	arrange_layers();
 }
@@ -1142,6 +1154,21 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	arrange_layers();
 }
 
+/* Show an output that is in the layout through the scene graph. */
+static void attach_scene_output(struct wlr_output *wlr_output) {
+	struct wlr_output_layout_output *l_output =
+		wlr_output_layout_get(server.output_layout, wlr_output);
+	/* Taking an output out of the layout keeps its scene output; one
+	 * left over from before it was turned off must go first. */
+	struct wlr_scene_output *old = wlr_scene_get_scene_output(server.scene, wlr_output);
+	if (old) {
+		wlr_scene_output_destroy(old);
+	}
+	struct wlr_scene_output *scene_output =
+		wlr_scene_output_create(server.scene, wlr_output);
+	wlr_scene_output_layout_add_output(server.scene_layout, l_output, scene_output);
+}
+
 static void server_new_output(struct wl_listener *listener, void *data) {
 	struct wlr_output *wlr_output = data;
 	wlr_output_init_render(wlr_output, server.allocator, server.renderer);
@@ -1172,14 +1199,111 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	wl_list_insert(server.outputs.prev, &output->link);
 
 	apply_output_rule(wlr_output, false);
-	struct wlr_output_layout_output *l_output =
-		wlr_output_layout_get(server.output_layout, wlr_output);
-	struct wlr_scene_output *scene_output =
-		wlr_scene_output_create(server.scene, wlr_output);
-	wlr_scene_output_layout_add_output(server.scene_layout, l_output, scene_output);
+	attach_scene_output(wlr_output);
 
 	ensure_workspace_group();
 	arrange_layers();
+}
+
+/* ---- output management (wlr-randr, kanshi) ------------------------------ */
+
+static struct wh_output *output_from_wlr(struct wlr_output *wlr_output) {
+	struct wh_output *output;
+	wl_list_for_each(output, &server.outputs, link) {
+		if (output->wlr_output == wlr_output) {
+			return output;
+		}
+	}
+	return NULL;
+}
+
+/* Tell output-management clients what the outputs look like now. Runs on
+ * every layout change, which covers hotplug, mode, scale and position. */
+static void update_output_manager(void) {
+	if (!server.output_mgr) {
+		return;
+	}
+	struct wlr_output_configuration_v1 *config = wlr_output_configuration_v1_create();
+	struct wh_output *output;
+	wl_list_for_each(output, &server.outputs, link) {
+		struct wlr_output_configuration_head_v1 *head =
+			wlr_output_configuration_head_v1_create(config, output->wlr_output);
+		/* Blanked by wlopm still counts as on; only our own "off" is off. */
+		head->state.enabled = !output->disabled;
+		struct wlr_box box;
+		wlr_output_layout_get_box(server.output_layout, output->wlr_output, &box);
+		if (!wlr_box_empty(&box)) {
+			head->state.x = box.x;
+			head->state.y = box.y;
+		}
+	}
+	wlr_output_manager_v1_set_configuration(server.output_mgr, config);
+}
+
+static void layout_change(struct wl_listener *listener, void *data) {
+	update_output_manager();
+}
+
+/* Commit (or only test) a whole configuration at once, then move the
+ * outputs in the layout to match. */
+static void output_config_handle(struct wlr_output_configuration_v1 *config,
+		bool test_only) {
+	size_t n = 0;
+	struct wlr_backend_output_state *states =
+		wlr_output_configuration_v1_build_state(config, &n);
+	bool ok = states != NULL;
+	if (ok) {
+		ok = test_only ? wlr_backend_test(server.backend, states, n)
+			: wlr_backend_commit(server.backend, states, n);
+		for (size_t i = 0; i < n; i++) {
+			wlr_output_state_finish(&states[i].base);
+		}
+		free(states);
+	}
+	if (ok && !test_only) {
+		struct wlr_output_configuration_head_v1 *head;
+		wl_list_for_each(head, &config->heads, link) {
+			struct wh_output *output = output_from_wlr(head->state.output);
+			if (!output) {
+				continue;
+			}
+			if (!head->state.enabled) {
+				if (!output->disabled) {
+					output->disabled = true;
+					wlr_output_layout_remove(server.output_layout, output->wlr_output);
+				}
+				continue;
+			}
+			bool was_disabled = output->disabled;
+			output->disabled = false;
+			wlr_xcursor_manager_load(server.cursor_mgr, output->wlr_output->scale);
+			/* Adding an output already in the layout moves it. */
+			wlr_output_layout_add(server.output_layout, output->wlr_output,
+				head->state.x, head->state.y);
+			if (was_disabled) {
+				attach_scene_output(output->wlr_output);
+			}
+		}
+		arrange_layers();
+	}
+	if (ok) {
+		wlr_output_configuration_v1_send_succeeded(config);
+	} else {
+		wlr_output_configuration_v1_send_failed(config);
+	}
+	wlr_output_configuration_v1_destroy(config);
+	if (!test_only) {
+		/* After a failure too, so clients see the state that stayed. */
+		update_output_manager();
+	}
+}
+
+static void output_mgr_apply(struct wl_listener *listener, void *data) {
+	output_config_handle(data, false);
+}
+
+static void output_mgr_test(struct wl_listener *listener, void *data) {
+	output_config_handle(data, true);
 }
 
 /* ---- views (xdg toplevels) ---------------------------------------------- */
@@ -2154,6 +2278,14 @@ int wh_init(void) {
 	server.output_layout = wlr_output_layout_create(server.wl_display);
 	server.new_output.notify = server_new_output;
 	wl_signal_add(&server.backend->events.new_output, &server.new_output);
+	server.layout_change.notify = layout_change;
+	wl_signal_add(&server.output_layout->events.change, &server.layout_change);
+
+	server.output_mgr = wlr_output_manager_v1_create(server.wl_display);
+	server.output_mgr_apply.notify = output_mgr_apply;
+	wl_signal_add(&server.output_mgr->events.apply, &server.output_mgr_apply);
+	server.output_mgr_test.notify = output_mgr_test;
+	wl_signal_add(&server.output_mgr->events.test, &server.output_mgr_test);
 
 	server.scene = wlr_scene_create();
 	server.scene_layout = wlr_scene_attach_output_layout(server.scene,
@@ -2161,6 +2293,10 @@ int wh_init(void) {
 	for (int i = 0; i < WH_LAYER_COUNT; i++) {
 		server.layers[i] = wlr_scene_tree_create(&server.scene->tree);
 	}
+	/* Night light (wlsunset, gammastep): the scene applies the gamma
+	 * tables on its own commits. */
+	wlr_scene_set_gamma_control_manager_v1(server.scene,
+		wlr_gamma_control_manager_v1_create(server.wl_display));
 
 	wl_list_init(&server.layer_surfaces);
 	server.layer_shell = wlr_layer_shell_v1_create(server.wl_display, 4);
@@ -2328,6 +2464,9 @@ void wh_shutdown(void) {
 	wl_list_remove(&server.request_set_primary_selection.link);
 	wl_list_remove(&server.request_set_cursor_shape.link);
 	wl_list_remove(&server.new_output.link);
+	wl_list_remove(&server.layout_change.link);
+	wl_list_remove(&server.output_mgr_apply.link);
+	wl_list_remove(&server.output_mgr_test.link);
 
 	wlr_scene_node_destroy(&server.scene->tree.node);
 	wlr_xcursor_manager_destroy(server.cursor_mgr);

@@ -118,7 +118,12 @@ WAYLAND_DISPLAY=wayland-N grim -s 0.5 shot.png       # capture
   power management (`wlopm`).
 - **Outputs:** multiple monitors xmonad-style (each screen shows one workspace;
   `workspace N` swaps screens if N is visible elsewhere), per-output scale and position,
-  xdg-output.
+  xdg-output. wlr-output-management (wlr-randr, kanshi, wdisplays): a configuration is
+  tested or committed for all outputs at once (`wlr_backend_test`/`commit`), then the
+  layout follows. Turning an output off this way takes it out of the layout; wlopm only
+  blanks it. The config's `[outputs]` rules are applied again on reload and override
+  what a client set. Gamma control (wlsunset, gammastep) is handed to the scene graph
+  (`wlr_scene_set_gamma_control_manager_v1`).
 - **Capture:** wlr-screencopy and export-dmabuf; `whiplash-portals.conf` points
   xdg-desktop-portal at the wlr backend for screen sharing and the gtk backend for the
   rest.
@@ -169,6 +174,13 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
   scene node is created on its first commit, and the parent may be a layer surface.
 - **Output order flipped on reload**: outputs were kept newest-first while the rules
   re-added them to the layout; they're now kept in creation order.
+- **Hidden windows left their borders behind**: an app that hides its window instead
+  of closing it (Steam going to the tray) unmaps it, and the brain forgets unmapped
+  views, so it never hid their border rects. The heart now disables the whole view on
+  unmap; the brain shows it again when it maps.
+- **Turning an output back on aborted**: taking an output out of the layout does not
+  destroy its scene output, so creating a new one hit wlroots' "two addons of the same
+  type" assertion. The old one is destroyed first.
 - **The first screen lock locked nothing**: lockers need ext-session-lock-v1, and
   without it the screen silently stayed open.
 
@@ -177,7 +189,6 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
 - Window rules (app to workspace, float), scratchpad.
 - Focus-follows-mouse (opt-in), touchpad gestures.
 - Animations, rounded corners, blur.
-- wlr-output-management (wlr-randr, kanshi), gamma control (wlsunset).
 - Floating windows keeping their place when their workspace moves to another screen.
 - An "occupied" hint for bars (ext-workspace has no such state).
-- Packages: an xbps template and an AUR PKGBUILD.
+- An AUR PKGBUILD (the xbps template lives in d77void/srcpkgs-d77).

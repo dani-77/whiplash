@@ -48,7 +48,8 @@ The name comes from Metallica's *Whiplash*.
 - **Touchpad that just works** — tap to click, tap and drag, and no stray clicks while
   you type, all on by default and adjustable in the config.
 - **Workspaces in your bar** — bars that support Wayland's standard workspace protocol
-  show and switch whiplash's workspaces with no extra setup.
+  show and switch whiplash's workspaces with no extra setup, and see which one holds a
+  window asking for your attention.
 - **A lock screen that actually works** — compatible with swaylock and any other
   standard Wayland lock screen. If the lock screen crashes, the session stays locked.
 - **Idle and power** — swayidle can lock and turn the screen off when you step away,

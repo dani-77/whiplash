@@ -116,6 +116,7 @@ whiplash defaults = do
     , floating = M.empty
     , fullscreen = S.empty
     , scratch = M.empty
+    , urgent = S.empty
     }
   let reloadNow = do
         old <- getConfig
@@ -147,6 +148,7 @@ whiplash defaults = do
     on <- focusFollowsMouse <$> getConfig
     when on (windows (W.focusWindow v))
   H.onViewFullscreen $ \v on -> run "fullscreen" (setFullscreen v on)
+  H.onViewUrgent $ \v on -> run "urgent" (setUrgent v on)
   -- Mod+drag on a tiled window floats it where it stands, like xmonad.
   H.onViewGrab $ \v (x, y, w, h) -> run "grab" $ do
     st <- getState

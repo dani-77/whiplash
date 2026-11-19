@@ -17,6 +17,8 @@ module Whiplash.Heart
   , setOutputRules
   , applyOutputRules
   , onViewFullscreen
+  , onViewUrgent
+  , setWorkspaceUrgent
   , onViewGrab
   , onViewMoved
   , ViewMode (..)
@@ -97,6 +99,8 @@ foreign import ccall unsafe "wh_output_rule_add" c_output_rule_add
   :: CString -> CFloat -> CInt -> CInt -> CInt -> IO ()
 foreign import ccall safe "wh_output_rules_apply" c_output_rules_apply :: IO ()
 foreign import ccall unsafe "wh_on_view_fullscreen" c_on_view_fullscreen :: FunPtr CStateCb -> IO ()
+foreign import ccall unsafe "wh_on_view_urgent" c_on_view_urgent :: FunPtr CStateCb -> IO ()
+foreign import ccall unsafe "wh_workspace_set_urgent" c_workspace_set_urgent :: CInt -> CInt -> IO ()
 foreign import ccall unsafe "wh_on_view_grab" c_on_view_grab :: FunPtr CRectCb -> IO ()
 foreign import ccall unsafe "wh_on_view_moved" c_on_view_moved :: FunPtr CRectCb -> IO ()
 foreign import ccall unsafe "wh_view_set_mode" c_set_mode :: Word32 -> CInt -> IO ()
@@ -222,6 +226,14 @@ onWorkspaceActivate f = mkTagCb (f . fromIntegral) >>= c_on_workspace_activate
 -- | Announce a workspace to bars (ext-workspace-v1).
 addWorkspace :: Int -> String -> IO ()
 addWorkspace tag name = withCString name (c_workspace_add (fromIntegral tag))
+
+-- | A window asks for attention (True), or an X11 one drops the hint.
+onViewUrgent :: (ViewId -> Bool -> IO ()) -> IO ()
+onViewUrgent f = mkStateCb (\v on -> f v (on /= 0)) >>= c_on_view_urgent
+
+-- | Mark a workspace urgent in bars (ext-workspace).
+setWorkspaceUrgent :: Int -> Bool -> IO ()
+setWorkspaceUrgent t on = c_workspace_set_urgent (fromIntegral t) (if on then 1 else 0)
 
 setActiveWorkspace :: Int -> IO ()
 setActiveWorkspace = c_workspace_set_active . fromIntegral

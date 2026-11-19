@@ -59,6 +59,7 @@
 #include <wlr/types/wlr_viewporter.h>
 #include <wlr/types/wlr_virtual_keyboard_v1.h>
 #include <wlr/types/wlr_virtual_pointer_v1.h>
+#include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
@@ -114,6 +115,9 @@ struct wh_server {
 
 	struct wlr_compositor *compositor;
 	struct wlr_xwayland *xwayland; /* NULL if XWayland could not start */
+	/* Wayland windows asking for attention (xdg-activation-v1). */
+	struct wlr_xdg_activation_v1 *activation;
+	struct wl_listener request_activation;
 	struct wl_listener xwayland_ready;
 	struct wl_listener xwayland_new_surface;
 	struct wl_listener new_xdg_popup;
@@ -252,6 +256,7 @@ struct wh_view {
 	struct wl_listener dissociate;
 	struct wl_listener request_configure;
 	struct wl_listener request_activate;
+	struct wl_listener set_hints; /* X11: urgency hint */
 };
 
 /* An override-redirect X11 window (menu, tooltip, dropdown): placed where
@@ -353,6 +358,7 @@ static wh_swipe_cb cb_swipe;
 static wh_key_cb cb_key;
 static wh_void_cb cb_outputs_changed;
 static wh_view_state_cb cb_view_fullscreen;
+static wh_view_state_cb cb_view_urgent;
 static wh_view_rect_cb cb_view_grab;
 static wh_view_rect_cb cb_view_moved;
 static wh_workspace_cb cb_workspace_activate;
@@ -366,6 +372,7 @@ void wh_on_swipe(wh_swipe_cb cb) { cb_swipe = cb; }
 void wh_on_key(wh_key_cb cb) { cb_key = cb; }
 void wh_on_outputs_changed(wh_void_cb cb) { cb_outputs_changed = cb; }
 void wh_on_view_fullscreen(wh_view_state_cb cb) { cb_view_fullscreen = cb; }
+void wh_on_view_urgent(wh_view_state_cb cb) { cb_view_urgent = cb; }
 void wh_on_view_grab(wh_view_rect_cb cb) { cb_view_grab = cb; }
 void wh_on_view_moved(wh_view_rect_cb cb) { cb_view_moved = cb; }
 void wh_on_workspace_activate(wh_workspace_cb cb) { cb_workspace_activate = cb; }
@@ -1685,6 +1692,26 @@ void wh_workspace_set_active(int tag) {
 	}
 }
 
+void wh_workspace_set_urgent(int tag, int on) {
+	struct wh_workspace *ws;
+	wl_list_for_each(ws, &server.workspaces, link) {
+		if (ws->tag == tag) {
+			wlr_ext_workspace_handle_v1_set_urgent(ws->handle, on != 0);
+		}
+	}
+}
+
+/* A Wayland window asks for attention (a link opened from a terminal, a
+ * notification action). It is never given focus from here: the brain
+ * marks it urgent, as wasp does. */
+static void request_activation(struct wl_listener *listener, void *data) {
+	struct wlr_xdg_activation_v1_request_activate_event *event = data;
+	struct wh_view *view = view_from_surface(event->surface);
+	if (view && cb_view_urgent) {
+		cb_view_urgent(view->id, 1);
+	}
+}
+
 /* ---- layer shell (bars, launchers, wallpapers, lock screens) ------------ */
 
 static void layer_map(struct wl_listener *listener, void *data) {
@@ -1904,6 +1931,16 @@ static void x11_request_activate(struct wl_listener *listener, void *data) {
 	}
 }
 
+/* WM_HINTS changed: the urgency flag comes and goes with it. */
+static void x11_set_hints(struct wl_listener *listener, void *data) {
+	struct wh_view *view = wl_container_of(listener, view, set_hints);
+	xcb_icccm_wm_hints_t *hints = view->xsurface->hints;
+	bool urgent = hints && (hints->flags & XCB_ICCCM_WM_HINT_X_URGENCY);
+	if (view->mapped && cb_view_urgent) {
+		cb_view_urgent(view->id, urgent);
+	}
+}
+
 static void x11_destroy(struct wl_listener *listener, void *data) {
 	struct wh_view *view = wl_container_of(listener, view, destroy);
 	if (view->associated) {
@@ -1916,6 +1953,7 @@ static void x11_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&view->request_configure.link);
 	wl_list_remove(&view->request_fullscreen.link);
 	wl_list_remove(&view->request_activate.link);
+	wl_list_remove(&view->set_hints.link);
 	wl_list_remove(&view->link);
 	if (server.grab_view == view) {
 		server.grab_view = NULL;
@@ -2026,6 +2064,8 @@ static void xwayland_new_surface(struct wl_listener *listener, void *data) {
 	wl_signal_add(&xs->events.request_fullscreen, &view->request_fullscreen);
 	view->request_activate.notify = x11_request_activate;
 	wl_signal_add(&xs->events.request_activate, &view->request_activate);
+	view->set_hints.notify = x11_set_hints;
+	wl_signal_add(&xs->events.set_hints, &view->set_hints);
 }
 
 static void xwayland_ready(struct wl_listener *listener, void *data) {
@@ -2462,6 +2502,10 @@ int wh_init(void) {
 		wl_signal_add(&server.workspace_mgr->events.commit, &server.workspace_commit);
 	}
 	wlr_xdg_output_manager_v1_create(server.wl_display, server.output_layout);
+	server.activation = wlr_xdg_activation_v1_create(server.wl_display);
+	server.request_activation.notify = request_activation;
+	wl_signal_add(&server.activation->events.request_activate,
+		&server.request_activation);
 
 	server.xdg_shell = wlr_xdg_shell_create(server.wl_display, 3);
 	server.new_xdg_toplevel.notify = server_new_xdg_toplevel;
@@ -2618,6 +2662,7 @@ void wh_shutdown(void) {
 	wl_list_remove(&server.request_set_cursor_shape.link);
 	wl_list_remove(&server.new_output.link);
 	wl_list_remove(&server.layout_change.link);
+	wl_list_remove(&server.request_activation.link);
 	wl_list_remove(&server.output_mgr_apply.link);
 	wl_list_remove(&server.output_mgr_test.link);
 

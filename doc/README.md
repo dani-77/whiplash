@@ -113,7 +113,11 @@ WAYLAND_DISPLAY=wayland-N grim -s 0.5 shot.png       # capture
   cursor-shape, libinput touchpad settings, pointer-gestures-v1 (unbound swipes,
   pinches and holds reach clients). Ctrl+Alt+F1..F12 is handled in C before the
   brain sees the key, so a broken config can't trap the user.
-- **Workspaces:** ext-workspace-v1, so bars can show and switch them.
+- **Workspaces:** ext-workspace-v1, so bars can show and switch them; the urgent state
+  is set for workspaces holding a window that asks for attention, through
+  xdg-activation-v1 (Wayland) or the X11 urgency hint. Activation never moves focus
+  (as in wasp); a window stops being urgent once it is focused. X11
+  `_NET_ACTIVE_WINDOW` requests still focus the window, as before.
 - **Session:** ext-session-lock-v1 (if the locker dies, the session stays locked;
   while locked only lock surfaces get input), idle notify, idle inhibit, wlr output
   power management (`wlopm`).

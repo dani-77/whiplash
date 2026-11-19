@@ -53,6 +53,9 @@ void wh_on_swipe(wh_swipe_cb cb);
 void wh_on_outputs_changed(wh_void_cb cb);
 /* A client asked to enter (on=1) or leave (on=0) fullscreen. */
 void wh_on_view_fullscreen(wh_view_state_cb cb);
+/* A window asks for attention (xdg-activation-v1, or the X11 urgency hint;
+ * on = 0 when an X11 window drops the hint). Never focuses anything. */
+void wh_on_view_urgent(wh_view_state_cb cb);
 /* mouse_mod + drag started on a view: float it now if it should move. */
 void wh_on_view_grab(wh_view_rect_cb cb);
 /* A drag ended; this is the view's new outer rectangle. */
@@ -85,6 +88,7 @@ void wh_set_mouse_mod(uint32_t mods);
 /* Announce a workspace to bars (after wh_init), and which one is shown. */
 void wh_workspace_add(int tag, const char *name);
 void wh_workspace_set_active(int tag);
+void wh_workspace_set_urgent(int tag, int on);
 void wh_set_border(int width, uint32_t focused_rgba, uint32_t normal_rgba);
 void wh_spawn(const char *command);
 /* Screens, left to right then top to bottom. wh_output_info fills

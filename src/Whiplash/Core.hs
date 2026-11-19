@@ -29,6 +29,7 @@ module Whiplash.Core
   , toggleFloat
   , toggleFullscreen
   , setFullscreen
+  , setUrgent
   , floatCentered
   , floatMoved
   , focusScreenBy
@@ -44,7 +45,7 @@ module Whiplash.Core
   , io
   ) where
 
-import Control.Monad (forM_, join)
+import Control.Monad (forM_, join, unless)
 import Control.Monad.Reader (MonadIO, MonadReader, ReaderT, asks, liftIO, runReaderT)
 import Data.Char (toLower)
 import Data.IORef
@@ -139,6 +140,7 @@ data WState = WState
   , floating :: M.Map H.ViewId Rect -- ^ floating windows and where they sit
   , fullscreen :: S.Set H.ViewId
   , scratch :: M.Map String H.ViewId -- ^ slot name -> its window, shown or hidden
+  , urgent :: S.Set H.ViewId -- ^ windows asking for attention, until focused
   }
 
 -- | The config can change at runtime (hot reload), so it lives in an
@@ -175,6 +177,8 @@ windows f = modifyState (\s -> s {windowSet = f (windowSet s)}) >> refresh
 refresh :: X ()
 refresh = do
   relocateFloats
+  -- A window stops being urgent once it has focus.
+  modifyState $ \s -> s {urgent = maybe id S.delete (W.peek (windowSet s)) (urgent s)}
   cfg <- getConfig
   st <- getState
   let ws = windowSet st
@@ -207,6 +211,8 @@ refresh = do
     forM_ (W.allWindows ws \\ wins) $ \v -> H.setVisible v False
     H.focusView (W.peek ws)
     H.setActiveWorkspace (W.current ws)
+    let urgentTags = [t | v <- S.toList (urgent st), Just t <- [W.findTag v ws]]
+    forM_ (M.keys (W.workspaces ws)) $ \t -> H.setWorkspaceUrgent t (t `elem` urgentTags)
 
 -- | Floating windows belong to their workspace, not to a screen: when a
 -- workspace is shown on another screen (greedy view, a monitor unplugged),
@@ -319,7 +325,17 @@ forget v = modifyState $ \s ->
   s { floating = M.delete v (floating s)
     , fullscreen = S.delete v (fullscreen s)
     , scratch = M.filter (/= v) (scratch s)
+    , urgent = S.delete v (urgent s)
     }
+
+-- | A window asks for attention, or (X11) drops the hint. The focused
+-- window is never urgent: it already has the user's attention.
+setUrgent :: H.ViewId -> Bool -> X ()
+setUrgent v on = do
+  focused <- W.peek . windowSet <$> getState
+  unless (on && focused == Just v) $ do
+    modifyState (\s -> s {urgent = (if on then S.insert else S.delete) v (urgent s)})
+    refresh
 
 -- | The next (+1) or previous (-1) workspace, wrapping (9 -> 1, 1 -> 9).
 cycleWorkspace :: Int -> X ()

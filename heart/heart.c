@@ -1206,6 +1206,8 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
 	if (cb_view_unmapped) {
 		cb_view_unmapped(view->id);
 	}
+	/* Same as x11_unmap: a hidden window must not leave its borders. */
+	wlr_scene_node_set_enabled(&view->container->node, false);
 }
 
 static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
@@ -1600,6 +1602,9 @@ static void x11_unmap(struct wl_listener *listener, void *data) {
 	if (cb_view_unmapped) {
 		cb_view_unmapped(view->id);
 	}
+	/* Hidden, not destroyed (Steam closing to the tray): the brain forgets
+	 * the view, so hide its borders here or they stay on screen. */
+	wlr_scene_node_set_enabled(&view->container->node, false);
 	if (view->surface_tree) {
 		wlr_scene_node_destroy(&view->surface_tree->node);
 		view->surface_tree = NULL;

@@ -153,8 +153,7 @@ whiplash defaults = do
     unless (M.member v (floating st) || S.member v (fullscreen st)) $
       modifyState (\s -> s {floating = M.insert v (Rect x y w h) (floating s)})
     windows (W.focusWindow v)
-  H.onViewMoved $ \v (x, y, w, h) -> run "moved" $
-    modifyState (\s -> s {floating = M.adjust (const (Rect x y w h)) v (floating s)})
+  H.onViewMoved $ \v (x, y, w, h) -> run "moved" (floatMoved v (Rect x y w h))
   H.onWorkspaceActivate $ \t -> run "workspace" (windows (W.view t))
   H.onOutputsChanged $ run "outputs" $ do
     outs <- io H.outputs

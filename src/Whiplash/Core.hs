@@ -30,6 +30,7 @@ module Whiplash.Core
   , toggleFullscreen
   , setFullscreen
   , floatCentered
+  , floatMoved
   , focusScreenBy
   , moveToScreenBy
   , OutputRule
@@ -173,6 +174,7 @@ windows f = modifyState (\s -> s {windowSet = f (windowSet s)}) >> refresh
 
 refresh :: X ()
 refresh = do
+  relocateFloats
   cfg <- getConfig
   st <- getState
   let ws = windowSet st
@@ -205,6 +207,53 @@ refresh = do
     forM_ (W.allWindows ws \\ wins) $ \v -> H.setVisible v False
     H.focusView (W.peek ws)
     H.setActiveWorkspace (W.current ws)
+
+-- | Floating windows belong to their workspace, not to a screen: when a
+-- workspace is shown on another screen (greedy view, a monitor unplugged),
+-- its floats move along, keeping their offset from the screen's corner.
+relocateFloats :: X ()
+relocateFloats = modifyState $ \st ->
+  let ws = windowSet st
+      wholes = map fst (screens st)
+      onScreen k tag fl = case (drop k (screens st), M.lookup tag (W.workspaces ws)) of
+        ((whole, _) : _, Just w) ->
+          foldr (M.adjust (relocate wholes whole)) fl (maybe [] W.integrate (W.stack w))
+        _ -> fl
+   in st {floating = M.foldrWithKey onScreen (floating st) (W.screenTags ws)}
+
+-- | Bring a floating rect onto screen @to@. One already there stays put;
+-- one on another screen keeps its offset from that screen's corner; one on
+-- no screen (its monitor is gone) is centred. Then it is fitted inside.
+relocate :: [Rect] -> Rect -> Rect -> Rect
+relocate wholes to r@(Rect x y w h)
+  | inside to = r
+  | otherwise = fit $ case filter inside wholes of
+      (from : _) -> Rect (x - rectX from + rectX to) (y - rectY from + rectY to) w h
+      [] -> Rect (rectX to + (rectW to - w) `div` 2) (rectY to + (rectH to - h) `div` 2) w h
+  where
+    (cx, cy) = (x + w `div` 2, y + h `div` 2)
+    inside (Rect sx sy sw sh) = cx >= sx && cx < sx + sw && cy >= sy && cy < sy + sh
+    fit (Rect fx fy fw fh) =
+      let w' = min fw (rectW to)
+          h' = min fh (rectH to)
+          clamp lo len v = max lo (min v (lo + len))
+       in Rect (clamp (rectX to) (rectW to - w') fx) (clamp (rectY to) (rectH to - h') fy) w' h'
+
+-- | A floating window was moved or resized (end of a drag, or an X11
+-- window resizing itself). Dropped on another screen, it joins the
+-- workspace shown there, as in xmonad.
+floatMoved :: H.ViewId -> Rect -> X ()
+floatMoved v r@(Rect x y w h) = do
+  modifyState (\s -> s {floating = M.adjust (const r) v (floating s)})
+  st <- getState
+  let ws = windowSet st
+      (cx, cy) = (x + w `div` 2, y + h `div` 2)
+      inside (Rect sx sy sw sh) = cx >= sx && cx < sx + sw && cy >= sy && cy < sy + sh
+      target = [t | (k, (whole, _)) <- zip [0 ..] (screens st), inside whole
+                  , Just t <- [M.lookup k (W.screenTags ws)]]
+  case (target, W.findTag v ws) of
+    (t : _, Just from) | t /= from -> windows (W.focusWindow v . W.shiftWin t v)
+    _ -> pure ()
 
 withFocused :: (H.ViewId -> X ()) -> X ()
 withFocused f = getState >>= maybe (pure ()) f . W.peek . windowSet

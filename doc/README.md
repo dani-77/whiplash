@@ -150,6 +150,14 @@ Otherwise the whole swipe, like every pinch and hold, is forwarded to clients th
 pointer-gestures-v1. Gestures can't be driven headless; the config parsing and the
 `workspace-next`/`workspace-prev` actions can.
 
+Floating windows belong to their workspace, not to a screen. Their rects are kept in
+layout coordinates, and every `refresh` starts with `relocateFloats`: a float whose
+centre is not on the screen now showing its workspace is moved over from the screen it
+is on, keeping its offset from that screen's corner, or centred when it is on no screen
+(its monitor went away), and then fitted inside. Dropping a float on another screen
+(`floatMoved`, at the end of a drag) moves it to the workspace shown there, as in
+xmonad, so it doesn't jump back. Dragging can't be driven headless.
+
 Scratchpads live entirely in the brain. `WState.scratch` maps a slot name to its
 view. A new window whose app_id matches a slot that has no window yet is caught
 (`captureScratchpad`) before the window rules run. Hiding a scratchpad deletes it from
@@ -219,6 +227,5 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
 ## Not done yet
 
 - Animations, rounded corners, blur.
-- Floating windows keeping their place when their workspace moves to another screen.
 - An "occupied" hint for bars (ext-workspace has no such state).
 - An AUR PKGBUILD (the xbps template lives in d77void/srcpkgs-d77).

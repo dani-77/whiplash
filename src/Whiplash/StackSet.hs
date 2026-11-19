@@ -25,6 +25,8 @@ module Whiplash.StackSet
   , setScreens
   , visibleTags
   , shift
+  , shiftWin
+  , findTag
   , modifyLayout
   , allWindows
   ) where
@@ -189,6 +191,22 @@ shift :: Eq a => Int -> StackSet l a -> StackSet l a
 shift t s = case peek s of
   Just a
     | t /= current s && M.member t (workspaces s) ->
+        let s' = delete a s
+         in s' {workspaces = M.adjust (insertWs a) t (workspaces s')}
+  _ -> s
+
+-- | The workspace holding a window.
+findTag :: Eq a => a -> StackSet l a -> Maybe Int
+findTag a s =
+  case [t | (t, w) <- M.toList (workspaces s), a `elem` maybe [] integrate (stack w)] of
+    (t : _) -> Just t
+    [] -> Nothing
+
+-- | Move any window (not just the focused one) to workspace @t@.
+shiftWin :: Eq a => Int -> a -> StackSet l a -> StackSet l a
+shiftWin t a s = case findTag a s of
+  Just from
+    | from /= t && M.member t (workspaces s) ->
         let s' = delete a s
          in s' {workspaces = M.adjust (insertWs a) t (workspaces s')}
   _ -> s

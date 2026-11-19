@@ -46,13 +46,14 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain >>= r
   where
     topKeys =
       [ "terminal", "mod", "gaps", "border", "layouts", "workspaces", "focus_follows_mouse"
-      , "keyboard", "touchpad", "autostart", "keybinds", "outputs", "rules"
+      , "keyboard", "touchpad", "autostart", "keybinds", "outputs", "rules", "scratchpads"
       ]
     plain cfg =
       pure cfg
         >>= field "terminal" str (\v c -> c {terminal = v})
         >>= field "mod" modifier (\v c -> c {modMask = v})
         >>= field "gaps" (nat "gaps") (\v c -> c {gaps = v})
+        >>= field "scratchpads" scratchpadTable (\v c -> c {scratchpads = v})
         >>= field "focus_follows_mouse" bool (\v c -> c {focusFollowsMouse = v})
         >>= field "border" border id
         >>= field "layouts" layoutList (\v c -> c {layouts = v})
@@ -187,6 +188,24 @@ touchpadTable tp (VTable t) = do
       Nothing -> Left ("expected one of " ++ intercalate ", " (map fst opts) ++ ", not " ++ show s)
 touchpadTable _ v = Left ("expected a table, got " ++ typeName v)
 
+-- | [scratchpads."term"] with command, and optional app_id (default: the
+-- name), width and height (fractions of the screen, default 0.6).
+scratchpadTable :: Value -> Result [(String, Scratchpad)]
+scratchpadTable (VTable ps) = mapM one (M.toList ps)
+  where
+    one (name, VTable p) = either (Left . ((name ++ ": ") ++)) Right $ do
+      _ <- checkKeys "" ["command", "app_id", "width", "height"] p ()
+      cmd <- maybe (Left "needs a command") str (M.lookup "command" p)
+      app <- maybe (Right name) str (M.lookup "app_id" p)
+      w <- maybe (Right 0.6) (fraction "width") (M.lookup "width" p)
+      h <- maybe (Right 0.6) (fraction "height") (M.lookup "height" p)
+      Right (name, Scratchpad cmd app w h)
+    one (name, v) = Left (name ++ ": expected a table, got " ++ typeName v)
+    fraction _ (VFloat d) | d >= 0.1 && d <= 1 = Right d
+    fraction _ (VInt 1) = Right 1
+    fraction what v = Left (what ++ " must be between 0.1 and 1, got " ++ showValue v)
+scratchpadTable v = Left ("expected a table, got " ++ typeName v)
+
 -- | [rules."firefox"] with workspace = 2 and/or float = true|false.
 ruleTable :: [Int] -> Value -> Result [(String, WindowRule)]
 ruleTable tags (VTable rs) = mapM one (M.toList rs)
@@ -275,6 +294,7 @@ actionNames =
   , "layout <name>", "next-layout", "master-ratio <+/-delta>"
   , "toggle-float", "fullscreen"
   , "focus-screen next|prev", "move-to-screen next|prev"
+  , "toggle-scratchpad <name>"
   ]
 
 parseAction :: Config -> String -> Result (X ())
@@ -306,6 +326,9 @@ parseAction cfg text = case words text of
   ["move-to-screen", dir] -> moveToScreenBy <$> direction dir
   ["toggle-float"] -> Right toggleFloat
   ["fullscreen"] -> Right toggleFullscreen
+  ["toggle-scratchpad", name]
+    | name `elem` map fst (scratchpads cfg) -> Right (toggleScratchpad name)
+    | otherwise -> Left ("no scratchpad " ++ show name ++ " in [scratchpads]")
   _ -> Left ("unknown action " ++ show text ++ " (known: " ++ intercalate ", " actionNames ++ ")")
   where
     direction d = case map toLower d of

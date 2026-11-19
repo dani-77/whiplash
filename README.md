@@ -37,6 +37,8 @@ The name comes from Metallica's *Whiplash*.
   float (or never float), by its name.
 - **Focus follows the mouse**, if you want it — point at a window to type into it,
   no click needed. Off by default; turn it on with `focus_follows_mouse = true`.
+- **Scratchpads** — a drop-down terminal (or any app) that one key shows and hides,
+  without closing it, wherever you are.
 - **Floating windows** — dialogs float on their own; hold the modifier and drag any
   window with the left button to move it, or with the right button to resize it.
 - **Fullscreen** for videos, games and presentations, on request from the app or with a
@@ -192,7 +194,13 @@ workspace = 2
 [rules."pavucontrol"]
 float = true
 
+# A drop-down terminal on Mod+backslash
+[scratchpads."term"]
+command = "foot --app-id scratch-term"
+app_id = "scratch-term"
+
 [keybinds]
+"Mod+backslash" = "toggle-scratchpad term"
 "Mod+Shift+Return" = "terminal"
 "Mod+j" = "focus-down"
 "Super+l" = "spawn swaylock"

@@ -68,6 +68,19 @@ applyToHeart cfg = do
     (tpDisableWhileTyping tp) (tpAccelSpeed tp)
     (fromEnum (tpAccelProfile tp)) (fromEnum (tpClickMethod tp))
 
+-- | A new window that is not a scratchpad: window rules, the dialog
+-- guess, then into the stack.
+placeNew :: String -> H.ViewId -> X ()
+placeNew app v = do
+  rules <- windowRules <$> getConfig
+  let rule = lookup (map toLower app) rules
+  -- In the log, so the name for a [rules] entry is easy to find.
+  io $ hPutStrLn stderr ("whiplash: window " ++ show v ++ " app_id " ++ show app
+    ++ maybe "" (const " (rule)") rule)
+  dialog <- io (H.wantsFloat v)
+  when (maybe dialog id (rule >>= ruleFloat)) (floatCentered v)
+  windows (maybe W.insertUp W.insertOn (rule >>= ruleWorkspace) v)
+
 keyMapOf :: Config -> KeyMap
 keyMapOf cfg = M.fromList (keys cfg cfg)
 
@@ -102,6 +115,7 @@ whiplash defaults = do
     , ratio = 0.55
     , floating = M.empty
     , fullscreen = S.empty
+    , scratch = M.empty
     }
   let reloadNow = do
         old <- getConfig
@@ -123,14 +137,10 @@ whiplash defaults = do
 
   H.onViewMapped $ \v -> run "map" $ do
     app <- io (H.appId v)
-    rules <- windowRules <$> getConfig
-    let rule = lookup (map toLower app) rules
-    -- In the log, so the name for a [rules] entry is easy to find.
-    io $ hPutStrLn stderr ("whiplash: window " ++ show v ++ " app_id " ++ show app
-      ++ maybe "" (const " (rule)") rule)
-    dialog <- io (H.wantsFloat v)
-    when (maybe dialog id (rule >>= ruleFloat)) (floatCentered v)
-    windows (maybe W.insertUp W.insertOn (rule >>= ruleWorkspace) v)
+    caught <- captureScratchpad app v
+    if caught
+      then io (hPutStrLn stderr ("whiplash: window " ++ show v ++ " app_id " ++ show app ++ " (scratchpad)"))
+      else placeNew app v
   H.onViewUnmapped $ \v -> run "unmap" (forget v >> windows (W.delete v))
   H.onViewClicked $ \v -> run "click" (windows (W.focusWindow v))
   H.onViewEntered $ \v -> run "enter" $ do

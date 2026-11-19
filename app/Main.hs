@@ -29,6 +29,7 @@ d77Config =
     , outputRules = []
     , windowRules = []
     , focusFollowsMouse = False
+    , scratchpads = []
     }
 
 -- | Same session services as wasp's autostart, plus the Utumno shell.

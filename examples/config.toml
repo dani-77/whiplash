@@ -84,11 +84,24 @@ click_method = "default"      # default, button-areas or clickfinger
 # [rules."pavucontrol"]
 # float = true
 
+# Scratchpads: a floating window shown and hidden with one key. The
+# first toggle runs command; the window it opens is caught by app_id
+# (default: the slot name) and from then on the key hides it and brings
+# it back, centred on the screen you are on, instead of closing it.
+# width and height are fractions of the screen (default 0.6). Bind it with
+# "toggle-scratchpad <name>" in [keybinds].
+# [scratchpads."term"]
+# command = "alacritty --class scratch-term"
+# app_id = "scratch-term"
+# width = 0.6
+# height = 0.6
+
 # Actions: spawn <command>, terminal (the one set above), close, quit,
 # reload, focus-down, focus-up, swap-down, swap-up, swap-master,
 # workspace <n>, move-to-workspace <n>, workspace-previous, layout <name>,
 # next-layout, master-ratio <+/-step>, toggle-float, fullscreen,
-# focus-screen next|prev, move-to-screen next|prev.
+# focus-screen next|prev, move-to-screen next|prev,
+# toggle-scratchpad <name>.
 #
 # Keys: a single character ("j", "1", ",") or an xkb key name ("Return",
 # "space", "Tab", "Print", "XF86AudioMute", ...). Modifiers: Mod, Alt, Super,
@@ -142,6 +155,7 @@ click_method = "default"      # default, button-areas or clickfinger
 "Mod+Shift+c" = "close"
 "Mod+Shift+q" = "quit"
 "Mod+Shift+r" = "reload"
+# "Mod+backslash" = "toggle-scratchpad term"   # key left of 1 on pt
 
 # Workspaces
 "Mod+1" = "workspace 1"

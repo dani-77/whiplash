@@ -34,6 +34,9 @@ module Whiplash.Core
   , moveToScreenBy
   , OutputRule
   , WindowRule (..)
+  , Scratchpad (..)
+  , toggleScratchpad
+  , captureScratchpad
   , forget
   , withFocused
   , io
@@ -101,6 +104,17 @@ data Config = Config
   , outputRules :: [OutputRule]
   , windowRules :: [(String, WindowRule)] -- ^ by lowercased app_id / X11 class
   , focusFollowsMouse :: Bool -- ^ hovering a window focuses it (no raise)
+  , scratchpads :: [(String, Scratchpad)] -- ^ by slot name
+  }
+
+-- | A named scratchpad slot: a floating window shown and hidden with one
+-- key. The first toggle runs 'spCommand'; the window it opens is caught
+-- by its app_id and kept from then on, hidden rather than closed.
+data Scratchpad = Scratchpad
+  { spCommand :: String
+  , spAppId :: String -- ^ matched ignoring case; defaults to the slot name
+  , spWidth :: Double -- ^ fraction of the screen's usable area
+  , spHeight :: Double
   }
 
 -- | What to do with a new window whose app_id (Wayland) or class (X11)
@@ -121,6 +135,7 @@ data WState = WState
   , ratio :: Double
   , floating :: M.Map H.ViewId Rect -- ^ floating windows and where they sit
   , fullscreen :: S.Set H.ViewId
+  , scratch :: M.Map String H.ViewId -- ^ slot name -> its window, shown or hidden
   }
 
 -- | The config can change at runtime (hot reload), so it lives in an
@@ -250,7 +265,58 @@ toggleFullscreen = withFocused $ \v -> getState >>= setFullscreen v . not . S.me
 -- | Forget everything about a window that went away.
 forget :: H.ViewId -> X ()
 forget v = modifyState $ \s ->
-  s {floating = M.delete v (floating s), fullscreen = S.delete v (fullscreen s)}
+  s { floating = M.delete v (floating s)
+    , fullscreen = S.delete v (fullscreen s)
+    , scratch = M.filter (/= v) (scratch s)
+    }
+
+-- | Show or hide a scratchpad slot. Empty slot: run its command (the
+-- window is caught on map). Shown on the current workspace: hide it, out
+-- of every workspace. Hidden or elsewhere: bring it here, centred, focused.
+toggleScratchpad :: String -> X ()
+toggleScratchpad name = do
+  cfg <- getConfig
+  st <- getState
+  case (lookup name (scratchpads cfg), M.lookup name (scratch st)) of
+    (Nothing, _) -> pure ()
+    (Just sp, Nothing) -> spawn (spCommand sp)
+    (Just sp, Just v)
+      | v `elem` here (windowSet st) -> do
+          windows (W.delete v)
+          io (H.setVisible v False)
+      | otherwise -> do
+          placeScratchpad sp v
+          windows (W.insertUp v . W.delete v)
+  where
+    here = maybe [] W.integrate . W.stack . W.currentWorkspace
+
+-- | A new window: if it belongs to an empty slot, keep it there and show
+-- it as the slot's floating window. True when it was caught.
+captureScratchpad :: String -> H.ViewId -> X Bool
+captureScratchpad app v = do
+  cfg <- getConfig
+  st <- getState
+  let free = [ (n, sp) | (n, sp) <- scratchpads cfg
+             , map toLower (spAppId sp) == map toLower app
+             , not (M.member n (scratch st)) ]
+  case free of
+    [] -> pure False
+    (n, sp) : _ -> do
+      modifyState (\s -> s {scratch = M.insert n v (scratch s)})
+      placeScratchpad sp v
+      windows (W.insertUp v)
+      pure True
+
+-- | Float a scratchpad window centred on the focused screen at its size.
+placeScratchpad :: Scratchpad -> H.ViewId -> X ()
+placeScratchpad sp v = do
+  st <- getState
+  let Rect sx sy sw sh = focusedArea st
+      w = round (fromIntegral sw * spWidth sp)
+      h = round (fromIntegral sh * spHeight sp)
+      r = Rect (sx + (sw - w) `div` 2) (sy + (sh - h) `div` 2) w h
+  modifyState $ \s ->
+    s {floating = M.insert v r (floating s), fullscreen = S.delete v (fullscreen s)}
 
 spawn :: String -> X ()
 spawn = io . H.spawnCommand

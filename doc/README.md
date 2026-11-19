@@ -141,6 +141,14 @@ The file is watched with inotify on its directory (so editors that save by renam
 temporary file are seen too) and reloaded on every write. A file that fails to parse
 never replaces a working config: the error goes to the log and to `notify-send`.
 
+Scratchpads live entirely in the brain. `WState.scratch` maps a slot name to its
+view. A new window whose app_id matches a slot that has no window yet is caught
+(`captureScratchpad`) before the window rules run. Hiding a scratchpad deletes it from
+the StackSet and disables it in the heart (`setVisible False`): refresh only touches
+windows in the StackSet, so it stays hidden until toggled again, and then it is
+re-floated centred on the focused screen and inserted on the current workspace.
+`forget` drops a slot whose window unmaps, so the next toggle runs the command again.
+
 Focus-follows-mouse: the heart reports `view_entered` only when real pointer motion
 lands on a different view than the last one (`hover_view`), so a window moving under
 a still pointer never takes focus, and moving inside the focused window after a
@@ -201,7 +209,6 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
 
 ## Not done yet
 
-- Scratchpad.
 - Touchpad gestures.
 - Animations, rounded corners, blur.
 - Floating windows keeping their place when their workspace moves to another screen.

@@ -138,7 +138,8 @@ struct wh_server {
 	struct wl_listener new_lock;
 	struct wlr_session_lock_v1 *lock; /* NULL once its client is gone */
 	bool locked;
-	struct wlr_scene_rect *lock_bg;
+	struct wlr_scene_rect *lock_bg; /* sized to the layout, see lock_update_geometry */
+	struct wl_list lock_surfaces; /* struct wh_lock_surface.link */
 	struct wl_listener lock_new_surface;
 	struct wl_listener lock_unlock;
 	struct wl_listener lock_destroy;
@@ -299,7 +300,10 @@ struct wh_workspace {
 };
 
 struct wh_lock_surface {
+	struct wl_list link;
 	struct wlr_session_lock_surface_v1 *lock_surface;
+	struct wlr_scene_tree *tree;
+	int width, height; /* last size sent in a configure */
 	struct wl_listener map;
 	struct wl_listener destroy;
 };
@@ -1361,8 +1365,11 @@ static void update_output_manager(void) {
 	wlr_output_manager_v1_set_configuration(server.output_mgr, config);
 }
 
+static void lock_update_geometry(void);
+
 static void layout_change(struct wl_listener *listener, void *data) {
 	update_output_manager();
+	lock_update_geometry();
 }
 
 /* Commit (or only test) a whole configuration at once, then move the
@@ -2090,22 +2097,52 @@ static void lock_surface_map(struct wl_listener *listener, void *data) {
 
 static void lock_surface_destroy(struct wl_listener *listener, void *data) {
 	struct wh_lock_surface *l = wl_container_of(listener, l, destroy);
+	wl_list_remove(&l->link);
 	wl_list_remove(&l->map.link);
 	wl_list_remove(&l->destroy.link);
 	free(l);
+}
+
+/* Place lock_bg over the whole output layout and each lock surface over its
+ * output, configured to the output's current size. The layout can start at
+ * negative coordinates (output rules take any x/y), so a fixed rect at 0,0
+ * would leave such outputs showing the session. Runs when locking, for each
+ * new lock surface and on every layout change (hotplug, mode, scale,
+ * position). */
+static void lock_update_geometry(void) {
+	if (!server.lock_bg) {
+		return; /* layout changes during startup, before setup made it */
+	}
+	struct wlr_box box;
+	wlr_output_layout_get_box(server.output_layout, NULL, &box);
+	wlr_scene_node_set_position(&server.lock_bg->node, box.x, box.y);
+	wlr_scene_rect_set_size(server.lock_bg, box.width, box.height);
+
+	struct wh_lock_surface *l;
+	wl_list_for_each(l, &server.lock_surfaces, link) {
+		struct wlr_box out;
+		wlr_output_layout_get_box(server.output_layout, l->lock_surface->output, &out);
+		if (wlr_box_empty(&out)) {
+			continue;
+		}
+		wlr_scene_node_set_position(&l->tree->node, out.x, out.y);
+		if (l->width != out.width || l->height != out.height) {
+			l->width = out.width;
+			l->height = out.height;
+			wlr_session_lock_surface_v1_configure(l->lock_surface, out.width, out.height);
+		}
+	}
 }
 
 static void lock_new_surface(struct wl_listener *listener, void *data) {
 	struct wlr_session_lock_surface_v1 *lock_surface = data;
 	struct wh_lock_surface *l = calloc(1, sizeof(*l));
 	l->lock_surface = lock_surface;
-
-	struct wlr_scene_tree *tree = wlr_scene_subsurface_tree_create(
+	l->tree = wlr_scene_subsurface_tree_create(
 		server.layers[WH_LAYER_LOCK], lock_surface->surface);
-	struct wlr_box box;
-	wlr_output_layout_get_box(server.output_layout, lock_surface->output, &box);
-	wlr_scene_node_set_position(&tree->node, box.x, box.y);
-	wlr_session_lock_surface_v1_configure(lock_surface, box.width, box.height);
+	wl_list_insert(&server.lock_surfaces, &l->link);
+	/* Positions it and sends the first configure. */
+	lock_update_geometry();
 
 	l->map.notify = lock_surface_map;
 	wl_signal_add(&lock_surface->surface->events.map, &l->map);
@@ -2146,6 +2183,7 @@ static void server_new_lock(struct wl_listener *listener, void *data) {
 	server.focused_layer = NULL;
 	server.grab_view = NULL;
 	server.grab_mode = WH_GRAB_NONE;
+	lock_update_geometry();
 	wlr_scene_node_set_enabled(&server.lock_bg->node, true);
 	wlr_seat_keyboard_notify_clear_focus(server.seat);
 	wlr_seat_pointer_clear_focus(server.seat);
@@ -2486,10 +2524,12 @@ int wh_init(void) {
 	wlr_screencopy_manager_v1_create(server.wl_display);
 	wlr_export_dmabuf_manager_v1_create(server.wl_display);
 
-	/* Covers every output while locked; 16k is larger than any layout. */
+	/* Covers every output while locked; sized to the layout by
+	 * lock_update_geometry. */
 	static const float lock_color[4] = { 0.06f, 0.06f, 0.08f, 1.0f };
 	server.lock_bg = wlr_scene_rect_create(server.layers[WH_LAYER_LOCK],
-		16384, 16384, lock_color);
+		0, 0, lock_color);
+	wl_list_init(&server.lock_surfaces);
 	wlr_scene_node_set_enabled(&server.lock_bg->node, false);
 	server.idle_notifier = wlr_idle_notifier_v1_create(server.wl_display);
 	server.idle_inhibit_mgr = wlr_idle_inhibit_v1_create(server.wl_display);

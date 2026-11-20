@@ -249,6 +249,11 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
   type" assertion. The old one is destroyed first.
 - **The first screen lock locked nothing**: lockers need ext-session-lock-v1, and
   without it the screen silently stayed open.
+- **The lock left monitors left of or above 0,0 open**: the lock's opaque backdrop
+  was a fixed 16384×16384 rect at 0,0, so an output placed at negative coordinates
+  by an output rule kept showing the session, on screen and in screencopy. The
+  backdrop now follows the output layout's bounding box, and lock surfaces are
+  moved and reconfigured on every layout change (hotplug, mode, scale, position).
 
 ## Not done yet
 

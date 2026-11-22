@@ -1760,6 +1760,22 @@ static void layer_commit(struct wl_listener *listener, void *data) {
 	if (ls->initial_commit || ls->current.committed) {
 		arrange_layers();
 	}
+	/* A layer can change its keyboard interactivity while mapped: a panel
+	 * kept mapped and shown or hidden by resizing (helium-d77's launcher and
+	 * session menu) asks for exclusive input when it opens and none when it
+	 * closes. Give it the keyboard, or give the keyboard back, as it does;
+	 * layer_map only covers surfaces that ask on their first map. */
+	if (ls->surface->mapped &&
+			(ls->current.committed & WLR_LAYER_SURFACE_V1_STATE_KEYBOARD_INTERACTIVITY)) {
+		if (ls->current.keyboard_interactive ==
+				ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE) {
+			focus_layer(ls);
+		} else if (ls->current.keyboard_interactive ==
+					ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE &&
+				server.focused_layer == ls) {
+			restore_view_focus();
+		}
+	}
 }
 
 static void layer_destroy(struct wl_listener *listener, void *data) {

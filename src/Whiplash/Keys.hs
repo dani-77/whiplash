@@ -18,6 +18,8 @@ module Whiplash.Keys
   , xF86AudioRaiseVolume
   , xF86AudioLowerVolume
   , xF86AudioMute
+  , xF86MonBrightnessUp
+  , xF86MonBrightnessDown
   ) where
 
 import Data.Char (ord)
@@ -49,3 +51,7 @@ xF86AudioRaiseVolume, xF86AudioLowerVolume, xF86AudioMute :: KeySym
 xF86AudioRaiseVolume = 0x1008ff13
 xF86AudioLowerVolume = 0x1008ff11
 xF86AudioMute = 0x1008ff12
+
+xF86MonBrightnessUp, xF86MonBrightnessDown :: KeySym
+xF86MonBrightnessUp = 0x1008ff02
+xF86MonBrightnessDown = 0x1008ff03

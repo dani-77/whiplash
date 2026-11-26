@@ -1,10 +1,10 @@
 -- | Turns ~/.config/whiplash/config.toml into a 'Config', on top of the
 -- defaults compiled into the binary. Every key the file sets replaces the
--- default; a [keybinds] table replaces the whole default binding set, so
--- the file always shows every active binding. Unknown keys are errors, so
--- a typo never goes unnoticed.
+-- default. A [keybinds] table replaces the whole default binding set.
+-- Backend tables can override autostart and individual bindings.
 module Whiplash.Settings
   ( loadSettings
+  , loadSettingsFor
   , builtinLayouts
   , actionNames
   ) where
@@ -30,9 +30,23 @@ builtinLayouts = [tall, wide, full]
 
 -- | Parse TOML text and apply it to the defaults.
 loadSettings :: Config -> String -> IO (Either String Config)
-loadSettings base src = case parseToml src of
+loadSettings = loadSettingsFor H.Wayland
+
+-- | Apply the shared settings, then select the overrides for this backend.
+loadSettingsFor :: H.Backend -> Config -> String -> IO (Either String Config)
+loadSettingsFor backend base src = case parseToml src of
   Left err -> pure (Left err)
-  Right table -> applySettings base table
+  Right table -> do
+    shared <- applySettings base table
+    case shared of
+      Left err -> pure (Left err)
+      Right cfg -> do
+        x11 <- applyProfile "x11" cfg table
+        wayland <- applyProfile "wayland" cfg table
+        pure $ do
+          x11Config <- x11
+          waylandConfig <- wayland
+          pure (if backend == H.X11 then x11Config else waylandConfig)
 
 type Result a = Either String a
 
@@ -47,6 +61,7 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain >>= r
     topKeys =
       [ "terminal", "mod", "gaps", "border", "layouts", "workspaces", "focus_follows_mouse"
       , "keyboard", "touchpad", "autostart", "keybinds", "outputs", "rules", "scratchpads", "gestures"
+      , "x11", "wayland"
       ]
     plain cfg =
       pure cfg
@@ -83,6 +98,33 @@ applySettings base t = case pure base >>= checkKeys "" topKeys t >>= plain >>= r
           , normalBorderColor = maybe (normalBorderColor c) id n
           }
     border v = Left ("expected a table, got " ++ typeName v)
+
+applyProfile :: String -> Config -> Table -> IO (Result Config)
+applyProfile name cfg root = case M.lookup name root of
+  Nothing -> pure (Right cfg)
+  Just (VTable t) -> case prepare t of
+    Left err -> pure (Left err)
+    Right session -> case M.lookup "keybinds" t of
+      Nothing -> pure (Right session)
+      Just (VTable binds) -> do
+        overrides <- parseBindings (name ++ ".keybinds") cfg decode binds
+        pure $ do
+          changes <- overrides
+          let common = M.fromList (keys cfg cfg)
+              effective = foldl (\km (key, action) -> M.alter (const action) key km) common changes
+          pure session {keys = const (M.toList effective)}
+      Just v -> pure (Left (name ++ ".keybinds must be a table, not " ++ typeName v))
+  Just v -> pure (Left (name ++ " must be a table, not " ++ typeName v))
+  where
+    prepare t = do
+      session <- checkKeys (name ++ ".") ["autostart", "keybinds"] t cfg
+      case M.lookup "autostart" t of
+        Nothing -> pure session
+        Just v -> do
+          commands <- either (Left . ((name ++ ".autostart: ") ++)) Right (strList "autostart" v)
+          pure session {startupHook = mapM_ spawn commands}
+    decode (VBool False) = Right Nothing
+    decode v = Just <$> (str v >>= parseAction cfg)
 
 checkKeys :: String -> [String] -> Table -> a -> Result a
 checkKeys prefix allowed t a = case filter (`notElem` allowed) (M.keys t) of
@@ -264,14 +306,16 @@ showValue v = typeName v
 -- Key bindings -----------------------------------------------------------
 
 bindings :: Config -> Table -> IO (Result [((KeyMask, KeySym), X ())])
-bindings cfg table = fmap sequence (mapM one (M.toList table))
+bindings cfg = parseBindings "keybinds" cfg (\v -> str v >>= parseAction cfg)
+
+parseBindings :: String -> Config -> (Value -> Result a) -> Table -> IO (Result [((KeyMask, KeySym), a)])
+parseBindings path cfg decode table = fmap sequence (mapM one (M.toList table))
   where
     one (combo, v) = do
       k <- parseCombo (modMask cfg) combo
-      pure $ either (Left . (("keybinds." ++ show combo ++ ": ") ++)) Right $ do
+      pure $ either (Left . ((path ++ "." ++ show combo ++ ": ") ++)) Right $ do
         key <- k
-        actionText <- str v
-        act <- parseAction cfg actionText
+        act <- decode v
         Right (key, act)
 
 -- | "Mod+Shift+Return" -> (mask, keysym). "Mod" is the configured modifier.

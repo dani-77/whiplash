@@ -7,8 +7,8 @@
 # ~/.local/state/whiplash/whiplash.log.
 #
 # Anything left out keeps its built-in default. The [keybinds] table, when
-# present, replaces the whole default set, so every active binding is listed
-# here.
+# present, replaces the whole default set. Backend tables can override
+# autostart and individual bindings.
 
 # Opened by the "terminal" action (Mod+Shift+Return below).
 terminal = "alacritty"
@@ -185,3 +185,31 @@ click_method = "default"      # default, button-areas or clickfinger
 "Mod+Shift+7" = "move-to-workspace 7"
 "Mod+Shift+8" = "move-to-workspace 8"
 "Mod+Shift+9" = "move-to-workspace 9"
+
+# The X11 login entry starts ATG. This list replaces the common autostart on
+# X11, so Wayland wallpaper and idle commands do not run in the Xorg session.
+[x11]
+autostart = [
+  "dunst",
+  "pipewire",
+  "pipewire-pulse",
+  "udiskie -a",
+  "brightnessctl set 50%",
+  "/usr/libexec/polkit-mate-authentication-agent-1",
+]
+
+# Use the common bindings with these X11-specific commands. Set an entry to
+# false to disable it on this backend.
+[x11.keybinds]
+"Mod+p" = "spawn dmenu_run"
+"Super+space" = "spawn qsd77 -c atg launcher"
+"Super+a" = false
+"Super+t" = "spawn amorphis --backend x11"
+"Super+x" = "spawn qsd77 -c atg session"
+"Super+y" = "spawn qsd77 -c atg wallpaper"
+"XF86AudioRaiseVolume" = "spawn qsd77 -c atg ipc call osd volumeUp"
+"XF86AudioLowerVolume" = "spawn qsd77 -c atg ipc call osd volumeDown"
+"XF86AudioMute" = "spawn qsd77 -c atg ipc call osd volumeMuteToggle"
+"XF86MonBrightnessUp" = "spawn qsd77 -c atg ipc call osd brightnessUp"
+"XF86MonBrightnessDown" = "spawn qsd77 -c atg ipc call osd brightnessDown"
+"Print" = 'spawn scrot "$HOME/screenshot-$(date +%Y%m%d-%H%M%S).png"'

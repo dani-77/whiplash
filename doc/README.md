@@ -172,14 +172,29 @@ The Wayland tests above were repeated after adding ATG. The ISO is pending.
 
 ## Configuration
 
-`config.toml` sits on top of the defaults compiled into `app/Main.hs`: every key the
-file sets replaces the default, anything left out keeps it. A `[keybinds]` table
-replaces the whole default binding set, so the file always shows every active binding.
-Unknown keys and unknown actions are errors.
+`config.toml` sits on top of the defaults compiled into `app/Main.hs`. A top-level
+`[keybinds]` table replaces the compiled key set. Add `[x11]` or `[wayland]` for
+settings specific to the backend selected at launch:
+
+```toml
+[x11]
+autostart = ["dunst", "pipewire", "pipewire-pulse"]
+
+[x11.keybinds]
+"Super+space" = "spawn qsd77 -c atg launcher"
+"Super+a" = false
+```
+
+Each profile's `autostart` replaces the common list. An empty array disables
+that list for the selected backend. A profile's `keybinds` adds or replaces
+individual bindings, and `false` removes a binding. The example config uses ATG
+and scrot for X11 and Utumno and grim for Wayland. Unknown keys and actions in
+either profile are errors.
 
 The file is watched with inotify on its directory (so editors that save by renaming a
 temporary file are seen too) and reloaded on every write. A file that fails to parse
 never replaces a working config: the error goes to the log and to `notify-send`.
+Autostart still runs once per login. Binding changes take effect on reload.
 
 Touchpad gestures: at `swipe_begin` the heart asks the brain (`wh_on_swipe` with
 `WH_SWIPE_QUERY`) whether any `[gestures]` entry uses that many fingers. If so the

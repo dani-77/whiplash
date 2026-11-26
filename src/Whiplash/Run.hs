@@ -4,6 +4,7 @@
 -- config: the error goes to the log and to a desktop notification.
 module Whiplash.Run
   ( whiplash
+  , whiplashWith
   , configPath
   ) where
 
@@ -35,8 +36,8 @@ configPath = do
   pure (base ++ "/whiplash", "config.toml")
 
 -- | Load the file over the defaults. A missing file means the defaults.
-readConfig :: Config -> FilePath -> IO (Either String Config)
-readConfig base path = do
+readConfig :: H.Backend -> Config -> FilePath -> IO (Either String Config)
+readConfig backend base path = do
   exists <- doesFileExist path
   if not exists
     then pure (Right base)
@@ -44,7 +45,7 @@ readConfig base path = do
       r <- try (readFile path >>= \s -> evaluate (length s) >> pure s)
       case r of
         Left e -> pure (Left ("cannot read " ++ path ++ ": " ++ show (e :: SomeException)))
-        Right src -> either (Left . ((path ++ ": ") ++)) Right <$> loadSettings base src
+        Right src -> either (Left . ((path ++ ": ") ++)) Right <$> loadSettingsFor backend base src
 
 complain :: String -> IO ()
 complain msg = do
@@ -109,17 +110,22 @@ parseArgs = go (Options H.Wayland False Nothing)
     go _ (arg : _) = Left ("unexpected argument " ++ show arg)
 
 whiplash :: Config -> IO ()
-whiplash defaults = do
+whiplash defaults = whiplashWith $ \backend ->
+  if backend == H.Wayland then defaults else defaults {startupHook = pure ()}
+
+-- | Select compiled defaults for the chosen backend before reading TOML.
+whiplashWith :: (H.Backend -> Config) -> IO ()
+whiplashWith defaults = do
   args <- getArgs
   case parseArgs args of
     Left err -> do
       hPutStrLn stderr ("whiplash: " ++ err)
       hPutStrLn stderr "Usage: whiplash [--backend wayland|x11] [-n] [-s CMD]"
       exitFailure
-    Right opts -> runSession opts defaults
+    Right opts@(Options backend _ _) -> runSession opts (defaults backend)
 
 runSession :: Options -> Config -> IO ()
-runSession (Options backend skipHook startupCmd) compiled = do
+runSession (Options backend skipHook startupCmd) defaults = do
   -- Started inside another graphical session (a nested test run)?
   nested <- or <$> mapM (fmap (maybe False (not . null)) . lookupEnv) ["WAYLAND_DISPLAY", "DISPLAY"]
   H.setBackend backend
@@ -129,11 +135,9 @@ runSession (Options backend skipHook startupCmd) compiled = do
     setEnv "XDG_SESSION_TYPE" "x11"
   (dir, name) <- configPath
   let path = dir ++ "/" ++ name
-      -- The compiled-in hook starts the Wayland shell and its services.
-      defaults = if backend == H.Wayland then compiled else compiled {startupHook = pure ()}
       installBindings bindings = when (backend == H.X11) (H.setBindings (M.keys bindings))
 
-  cfg0 <- readConfig defaults path >>= either (\e -> complain e >> pure defaults) pure
+  cfg0 <- readConfig backend defaults path >>= either (\e -> complain e >> pure defaults) pure
   cfgRef <- newIORef cfg0
   keyRef <- newIORef (keyMapOf cfg0)
   stRef <- newIORef WState
@@ -148,7 +152,7 @@ runSession (Options backend skipHook startupCmd) compiled = do
     }
   let reloadNow = do
         old <- getConfig
-        r <- io (readConfig defaults path)
+        r <- io (readConfig backend defaults path)
         case r of
           Left err -> io (complain err)
           Right new -> do

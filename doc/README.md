@@ -101,6 +101,10 @@ resolve the installed config and appends `-s 'QT_QPA_PLATFORM=xcb qs -n -d -c at
 Edit the wrapper to change the ATG startup command. The example X11 profile
 lists the other services.
 
+ATG's EWMH panel uses the `XDG_CURRENT_DESKTOP=whiplash` session value to select
+Quickshell's `PanelWindow`. Its strut comes from the bar height and top margin.
+Earlier ATG versions can use `WHIPLASH_X11_RESERVE_TOP` as a manual fallback.
+
 [`Run.hs`](../src/Whiplash/Run.hs) selects the backend before loading the config.
 On X11 it clears inherited `WAYLAND_DISPLAY` and `WAYLAND_SOCKET` and sets
 `XDG_SESSION_TYPE=x11`. After backend initialization it installs bindings, registers

@@ -115,9 +115,10 @@ sudo make install
 Both entries call the [session script](data/whiplash-session), installed as
 `/usr/bin/whiplash-session`. The X11 entry passes `--backend x11`. When the
 system ATG configuration and `qs` are available, the script starts ATG via
-`-s 'QT_QPA_PLATFORM=xcb qs -n -d -c atg'`. Panels can reserve space through
-EWMH. For bars that supply no strut, such as the current ATG bar, set
-`WHIPLASH_X11_RESERVE_TOP` in the session environment to add a manual inset.
+`-s 'QT_QPA_PLATFORM=xcb qs -n -d -c atg'`. ATG versions with EWMH panel
+support reserve their own space in a Whiplash session. For a bar that supplies
+no strut, set `WHIPLASH_X11_RESERVE_TOP` in the session environment to add a
+manual inset.
 An EWMH top reservation and this value combine by taking the larger one.
 Edit the session script to change the automatic ATG launch. The rest of your
 autostart list lives in `config.toml`.

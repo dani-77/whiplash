@@ -28,6 +28,7 @@ struct x11_view {
 struct x11_workspace {
 	int tag;
 	char *name;
+	uint32_t window_count;
 };
 
 struct x11_rect {
@@ -49,7 +50,7 @@ enum ewmh_atom {
 	NET_WM_STATE, NET_WM_STATE_FULLSCREEN, UTF8_STRING,
 	NET_WM_WINDOW_TYPE, NET_WM_WINDOW_TYPE_DIALOG, NET_WM_WINDOW_TYPE_UTILITY,
 	NET_WM_WINDOW_TYPE_SPLASH, NET_WM_WINDOW_TYPE_TOOLBAR,
-	NET_WM_STATE_MODAL, EWMH_COUNT,
+	NET_WM_STATE_MODAL, D77_WORKSPACE_COUNTS, EWMH_COUNT,
 };
 
 static const char *const ewmh_names[] = {
@@ -59,7 +60,7 @@ static const char *const ewmh_names[] = {
 	"_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN", "UTF8_STRING",
 	"_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DIALOG", "_NET_WM_WINDOW_TYPE_UTILITY",
 	"_NET_WM_WINDOW_TYPE_SPLASH", "_NET_WM_WINDOW_TYPE_TOOLBAR",
-	"_NET_WM_STATE_MODAL",
+	"_NET_WM_STATE_MODAL", "_D77_WORKSPACE_COUNTS",
 };
 
 static struct {
@@ -83,6 +84,7 @@ static struct {
 	xcb_window_t wm_check;
 	struct x11_workspace *workspaces;
 	uint32_t workspace_count, published_count, current_desktop;
+	bool workspace_counts_dirty;
 	int width, height, reserve_top;
 	int border_width;
 	uint32_t focused_border, normal_border;
@@ -222,7 +224,8 @@ void wh_x11_add_workspace(int tag, const char *name) {
 		return;
 	}
 	x11.workspaces = ws;
-	ws[x11.workspace_count++] = (struct x11_workspace){tag, copy};
+	ws[x11.workspace_count++] = (struct x11_workspace){.tag = tag, .name = copy};
+	x11.workspace_counts_dirty = true;
 }
 
 static void publish_workspace_list(void) {
@@ -261,6 +264,37 @@ void wh_x11_set_active_workspace(int tag) {
 			return;
 		}
 	}
+}
+
+void wh_x11_set_workspace_counts(const int *pairs, unsigned count) {
+	if (!x11.workspace_count) {
+		return;
+	}
+	for (uint32_t i = 0; i < x11.workspace_count; i++) {
+		struct x11_workspace *ws = &x11.workspaces[i];
+		for (unsigned j = 0; j < count; j++) {
+			if (pairs[2 * j] == ws->tag) {
+				uint32_t windows = pairs[2 * j + 1];
+				x11.workspace_counts_dirty |= ws->window_count != windows;
+				ws->window_count = windows;
+				break;
+			}
+		}
+	}
+	if (!x11.workspace_counts_dirty) {
+		return;
+	}
+	uint32_t *counts = calloc(x11.workspace_count, sizeof(*counts));
+	if (!counts) {
+		return;
+	}
+	for (uint32_t i = 0; i < x11.workspace_count; i++) {
+		counts[i] = x11.workspaces[i].window_count;
+	}
+	set_root_cardinals(D77_WORKSPACE_COUNTS, x11.workspace_count, counts);
+	free(counts);
+	x11.workspace_counts_dirty = false;
+	xcb_flush(x11.connection);
 }
 
 static void set_wm_state(xcb_window_t id, uint32_t state) {
@@ -880,6 +914,7 @@ failed:
 
 void wh_x11_shutdown(void) {
 	wl_event_source_remove(x11.events);
+	xcb_delete_property(x11.connection, x11.root, x11.ewmh[D77_WORKSPACE_COUNTS]);
 	for (unsigned i = 0; i < NET_WM_NAME; i++) {
 		xcb_delete_property(x11.connection, x11.root, x11.ewmh[i]);
 	}

@@ -124,6 +124,14 @@ Haskell and refreshes the grabs on keymap changes and TOML reload.
   changes. ATG's override-redirect bar uses the top reservation set in the wrapper.
   The reservation affects the usable rectangle for tiling and `_NET_WORKAREA`.
   Fullscreen uses the full rectangle. Both rectangles describe one X screen today.
+- **Workspace occupancy.** The shared Haskell core counts windows in each
+  `StackSet` workspace. On native X11 the backend publishes these counts as
+  `_D77_WORKSPACE_COUNTS` (`CARDINAL[]/32`) on the root window, in EWMH desktop
+  order. The property changes when a workspace gains or loses a window, including
+  moves between workspaces, and is removed at shutdown. Windows on hidden
+  workspaces still count. A hidden scratchpad belongs to no workspace and
+  contributes nothing. ATG watches the property and dims empty inactive workspaces
+  when the array covers all desktops.
 - **Visibility.** Hiding a client increments its pending-unmap count before issuing
   `UnmapWindow`. The corresponding event consumes that count and preserves the
   client in the `StackSet`. A client withdrawal or destruction invokes the shared
@@ -212,7 +220,7 @@ the X11 input and fullscreen changes.
 
 On the test X11 display, use `wmctrl -d` to list desktops and
 `wmctrl -s 1` to select the second desktop. Use
-`xprop -root _NET_CURRENT_DESKTOP _NET_DESKTOP_NAMES _NET_WORKAREA`
+`xprop -root _NET_CURRENT_DESKTOP _NET_DESKTOP_NAMES _NET_WORKAREA _D77_WORKSPACE_COUNTS`
 to see what the WM publishes to ATG. Set `DISPLAY` to the dedicated Xephyr
 display before running those commands.
 
@@ -390,5 +398,5 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
 ## Not done yet
 
 - Animations, rounded corners, blur.
-- Native X11 per-monitor work areas and occupied and urgent hints for the ATG bar.
+- Native X11 per-monitor work areas and urgent hints for the ATG bar.
 - D77 ISO integration for the two sessions.

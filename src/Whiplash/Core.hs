@@ -206,6 +206,7 @@ refresh = do
       shown = map onScreen (M.toList (W.screenTags ws))
       wins = concatMap fst shown
       placed = concatMap snd shown
+      counts = [(t, maybe 0 (length . W.integrate) (W.stack w)) | (t, w) <- M.toList (W.workspaces ws)]
   io $ do
     -- The mode goes first: it decides the border width the geometry uses.
     forM_ placed $ \(v, mode, Rect x y w h) -> do
@@ -215,9 +216,10 @@ refresh = do
     forM_ (W.allWindows ws \\ wins) $ \v -> H.setVisible v False
     H.focusView (W.peek ws)
     H.setActiveWorkspace (W.current ws)
+    H.setWorkspaceCounts counts
     let urgentTags = [t | v <- S.toList (urgent st), Just t <- [W.findTag v ws]]
     forM_ (M.keys (W.workspaces ws)) $ \t -> H.setWorkspaceUrgent t (t `elem` urgentTags)
-  publishWorkspaces
+  publishWorkspaces counts
 
 -- | Floating windows belong to their workspace, not to a screen: when a
 -- workspace is shown on another screen (greedy view, a monitor unplugged),
@@ -280,12 +282,10 @@ workspacesFile = do
 -- | Rewrite 'workspacesFile' when a workspace gains or loses windows.
 -- Written beside it and renamed, so readers never see half a file. The
 -- ids match the heart's ext-workspace ids ("whiplash-<n>").
-publishWorkspaces :: X ()
-publishWorkspaces = do
+publishWorkspaces :: [(Int, Int)] -> X ()
+publishWorkspaces counts = do
   st <- getState
-  let ws = W.workspaces (windowSet st)
-      body = concat [ "whiplash-" ++ show t ++ " " ++ show (length (maybe [] W.integrate (W.stack w))) ++ "\n"
-                    | (t, w) <- M.toList ws ]
+  let body = concat ["whiplash-" ++ show t ++ " " ++ show count ++ "\n" | (t, count) <- counts]
   unless (body == published st) $ do
     path <- io workspacesFile
     -- Only what was really written counts as published.

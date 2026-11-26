@@ -19,6 +19,7 @@ module Whiplash.Heart
   , onViewFullscreen
   , onViewUrgent
   , setWorkspaceUrgent
+  , setWorkspaceCounts
   , onViewGrab
   , onViewMoved
   , ViewMode (..)
@@ -108,6 +109,7 @@ foreign import ccall safe "wh_output_rules_apply" c_output_rules_apply :: IO ()
 foreign import ccall unsafe "wh_on_view_fullscreen" c_on_view_fullscreen :: FunPtr CStateCb -> IO ()
 foreign import ccall unsafe "wh_on_view_urgent" c_on_view_urgent :: FunPtr CStateCb -> IO ()
 foreign import ccall unsafe "wh_workspace_set_urgent" c_workspace_set_urgent :: CInt -> CInt -> IO ()
+foreign import ccall unsafe "wh_workspace_set_counts" c_workspace_set_counts :: Ptr CInt -> CUInt -> IO ()
 foreign import ccall unsafe "wh_on_view_grab" c_on_view_grab :: FunPtr CRectCb -> IO ()
 foreign import ccall unsafe "wh_on_view_moved" c_on_view_moved :: FunPtr CRectCb -> IO ()
 foreign import ccall unsafe "wh_view_set_mode" c_set_mode :: Word32 -> CInt -> IO ()
@@ -247,6 +249,13 @@ onViewUrgent f = mkStateCb (\v on -> f v (on /= 0)) >>= c_on_view_urgent
 -- | Mark a workspace urgent in bars (ext-workspace).
 setWorkspaceUrgent :: Int -> Bool -> IO ()
 setWorkspaceUrgent t on = c_workspace_set_urgent (fromIntegral t) (if on then 1 else 0)
+
+-- | Publish occupancy for bars on native X11.
+setWorkspaceCounts :: [(Int, Int)] -> IO ()
+setWorkspaceCounts counts = withArray (concatMap pair counts) $ \pairs ->
+  c_workspace_set_counts pairs (fromIntegral (length counts))
+  where
+    pair (tag, total) = [fromIntegral tag, fromIntegral total]
 
 setActiveWorkspace :: Int -> IO ()
 setActiveWorkspace = c_workspace_set_active . fromIntegral

@@ -21,6 +21,7 @@ void wh_x11_set_focus_follows_mouse(int enabled);
 void wh_x11_set_mouse_mod(uint32_t mods);
 void wh_x11_add_workspace(int tag, const char *name);
 void wh_x11_set_active_workspace(int tag);
+void wh_x11_set_workspace_counts(const int *pairs, unsigned count);
 int wh_x11_output_info(int index, int *out);
 void wh_x11_set_border(int width, uint32_t focused, uint32_t normal);
 void wh_x11_set_mode(wh_view_id id, int mode);

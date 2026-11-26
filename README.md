@@ -57,7 +57,8 @@ The name comes from Metallica's *Whiplash*.
 - **Runs your existing Linux apps**, X11 ones included, through XWayland.
 
 The X11 backend currently manages one X screen. ATG can switch workspaces and show
-the active workspace. Per-monitor work areas are still pending on X11.
+the active workspace. An ATG build with occupancy support also dims empty
+inactive workspaces. Per-monitor work areas are still pending on X11.
 
 ## Installing
 

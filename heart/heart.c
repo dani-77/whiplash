@@ -1746,6 +1746,12 @@ void wh_workspace_set_urgent(int tag, int on) {
 	}
 }
 
+void wh_workspace_set_counts(const int *pairs, unsigned count) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_set_workspace_counts(pairs, count);
+	}
+}
+
 /* A Wayland window asks for attention (a link opened from a terminal, a
  * notification action). It is never given focus from here: the brain
  * marks it urgent, as wasp does. */

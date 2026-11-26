@@ -216,9 +216,9 @@ refresh = do
     forM_ (W.allWindows ws \\ wins) $ \v -> H.setVisible v False
     H.focusView (W.peek ws)
     H.setActiveWorkspace (W.current ws)
-    H.setWorkspaceCounts counts
     let urgentTags = [t | v <- S.toList (urgent st), Just t <- [W.findTag v ws]]
     forM_ (M.keys (W.workspaces ws)) $ \t -> H.setWorkspaceUrgent t (t `elem` urgentTags)
+    H.setWorkspaceCounts counts
   publishWorkspaces counts
 
 -- | Floating windows belong to their workspace, not to a screen: when a

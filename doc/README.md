@@ -132,6 +132,13 @@ Haskell and refreshes the grabs on keymap changes and TOML reload.
   workspaces still count. A hidden scratchpad belongs to no workspace and
   contributes nothing. ATG watches the property and dims empty inactive workspaces
   when the array covers all desktops.
+- **Workspace urgency.** The native backend reads the ICCCM urgency bit in
+  `WM_HINTS` and honors `_NET_WM_STATE_DEMANDS_ATTENTION` at map time and in client
+  messages. Both feed the shared Haskell urgency state. Requests preserve focus
+  and the active workspace. Focusing the window clears the tracked urgency and
+  the EWMH attention atom. Whiplash publishes `_D77_WORKSPACE_URGENT`
+  (`CARDINAL[]/32`) on the root window in desktop order, with one `0` or `1`
+  per workspace. ATG uses this optional array for the red indicator.
 - **Visibility.** Hiding a client increments its pending-unmap count before issuing
   `UnmapWindow`. The corresponding event consumes that count and preserves the
   client in the `StackSet`. A client withdrawal or destruction invokes the shared
@@ -220,7 +227,7 @@ the X11 input and fullscreen changes.
 
 On the test X11 display, use `wmctrl -d` to list desktops and
 `wmctrl -s 1` to select the second desktop. Use
-`xprop -root _NET_CURRENT_DESKTOP _NET_DESKTOP_NAMES _NET_WORKAREA _D77_WORKSPACE_COUNTS`
+`xprop -root _NET_CURRENT_DESKTOP _NET_DESKTOP_NAMES _NET_WORKAREA _D77_WORKSPACE_COUNTS _D77_WORKSPACE_URGENT`
 to see what the WM publishes to ATG. Set `DISPLAY` to the dedicated Xephyr
 display before running those commands.
 
@@ -398,5 +405,5 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
 ## Not done yet
 
 - Animations, rounded corners, blur.
-- Native X11 per-monitor work areas and urgent hints for the ATG bar.
+- Native X11 per-monitor work areas.
 - D77 ISO integration for the two sessions.

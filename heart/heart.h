@@ -96,7 +96,7 @@ void wh_set_focus_follows_mouse(int enabled);
 void wh_workspace_add(int tag, const char *name);
 void wh_workspace_set_active(int tag);
 void wh_workspace_set_urgent(int tag, int on);
-/* Consecutive workspace tag/window count pairs. */
+/* Consecutive tag/window count pairs. Flushes native X11 urgency updates. */
 void wh_workspace_set_counts(const int *pairs, unsigned count);
 void wh_set_border(int width, uint32_t focused_rgba, uint32_t normal_rgba);
 void wh_spawn(const char *command);

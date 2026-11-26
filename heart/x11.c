@@ -19,6 +19,7 @@ struct x11_view {
 	struct x11_view *next;
 	xcb_window_t id;
 	bool mapped, wants_float, fullscreen_hint;
+	bool urgency_hint, demands_attention;
 	enum wh_view_mode mode;
 	unsigned pending_unmaps;
 	int natural_width, natural_height;
@@ -29,6 +30,7 @@ struct x11_workspace {
 	int tag;
 	char *name;
 	uint32_t window_count;
+	bool urgent;
 };
 
 struct x11_rect {
@@ -47,20 +49,20 @@ enum ewmh_atom {
 	NET_SUPPORTED, NET_SUPPORTING_WM_CHECK, NET_NUMBER_OF_DESKTOPS,
 	NET_CURRENT_DESKTOP, NET_DESKTOP_NAMES, NET_DESKTOP_GEOMETRY,
 	NET_DESKTOP_VIEWPORT, NET_WORKAREA, NET_WM_NAME,
-	NET_WM_STATE, NET_WM_STATE_FULLSCREEN, UTF8_STRING,
+	NET_WM_STATE, NET_WM_STATE_FULLSCREEN, NET_WM_STATE_DEMANDS_ATTENTION, UTF8_STRING,
 	NET_WM_WINDOW_TYPE, NET_WM_WINDOW_TYPE_DIALOG, NET_WM_WINDOW_TYPE_UTILITY,
 	NET_WM_WINDOW_TYPE_SPLASH, NET_WM_WINDOW_TYPE_TOOLBAR,
-	NET_WM_STATE_MODAL, D77_WORKSPACE_COUNTS, EWMH_COUNT,
+	NET_WM_STATE_MODAL, D77_WORKSPACE_COUNTS, D77_WORKSPACE_URGENT, EWMH_COUNT,
 };
 
 static const char *const ewmh_names[] = {
 	"_NET_SUPPORTED", "_NET_SUPPORTING_WM_CHECK", "_NET_NUMBER_OF_DESKTOPS",
 	"_NET_CURRENT_DESKTOP", "_NET_DESKTOP_NAMES", "_NET_DESKTOP_GEOMETRY",
 	"_NET_DESKTOP_VIEWPORT", "_NET_WORKAREA", "_NET_WM_NAME",
-	"_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN", "UTF8_STRING",
+	"_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN", "_NET_WM_STATE_DEMANDS_ATTENTION", "UTF8_STRING",
 	"_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DIALOG", "_NET_WM_WINDOW_TYPE_UTILITY",
 	"_NET_WM_WINDOW_TYPE_SPLASH", "_NET_WM_WINDOW_TYPE_TOOLBAR",
-	"_NET_WM_STATE_MODAL", "_D77_WORKSPACE_COUNTS",
+	"_NET_WM_STATE_MODAL", "_D77_WORKSPACE_COUNTS", "_D77_WORKSPACE_URGENT",
 };
 
 static struct {
@@ -84,7 +86,7 @@ static struct {
 	xcb_window_t wm_check;
 	struct x11_workspace *workspaces;
 	uint32_t workspace_count, published_count, current_desktop;
-	bool workspace_counts_dirty;
+	bool workspace_counts_dirty, workspace_urgency_dirty;
 	int width, height, reserve_top;
 	int border_width;
 	uint32_t focused_border, normal_border;
@@ -226,6 +228,7 @@ void wh_x11_add_workspace(int tag, const char *name) {
 	x11.workspaces = ws;
 	ws[x11.workspace_count++] = (struct x11_workspace){.tag = tag, .name = copy};
 	x11.workspace_counts_dirty = true;
+	x11.workspace_urgency_dirty = true;
 }
 
 static void publish_workspace_list(void) {
@@ -266,6 +269,18 @@ void wh_x11_set_active_workspace(int tag) {
 	}
 }
 
+void wh_x11_set_workspace_urgent(int tag, int enabled) {
+	for (uint32_t i = 0; i < x11.workspace_count; i++) {
+		struct x11_workspace *ws = &x11.workspaces[i];
+		if (ws->tag == tag) {
+			bool urgent = enabled != 0;
+			x11.workspace_urgency_dirty |= ws->urgent != urgent;
+			ws->urgent = urgent;
+			return;
+		}
+	}
+}
+
 void wh_x11_set_workspace_counts(const int *pairs, unsigned count) {
 	if (!x11.workspace_count) {
 		return;
@@ -281,19 +296,28 @@ void wh_x11_set_workspace_counts(const int *pairs, unsigned count) {
 			}
 		}
 	}
-	if (!x11.workspace_counts_dirty) {
+	if (!x11.workspace_counts_dirty && !x11.workspace_urgency_dirty) {
 		return;
 	}
-	uint32_t *counts = calloc(x11.workspace_count, sizeof(*counts));
-	if (!counts) {
+	uint32_t *values = calloc(x11.workspace_count, sizeof(*values));
+	if (!values) {
 		return;
 	}
-	for (uint32_t i = 0; i < x11.workspace_count; i++) {
-		counts[i] = x11.workspaces[i].window_count;
+	if (x11.workspace_counts_dirty) {
+		for (uint32_t i = 0; i < x11.workspace_count; i++) {
+			values[i] = x11.workspaces[i].window_count;
+		}
+		set_root_cardinals(D77_WORKSPACE_COUNTS, x11.workspace_count, values);
+		x11.workspace_counts_dirty = false;
 	}
-	set_root_cardinals(D77_WORKSPACE_COUNTS, x11.workspace_count, counts);
-	free(counts);
-	x11.workspace_counts_dirty = false;
+	if (x11.workspace_urgency_dirty) {
+		for (uint32_t i = 0; i < x11.workspace_count; i++) {
+			values[i] = x11.workspaces[i].urgent;
+		}
+		set_root_cardinals(D77_WORKSPACE_URGENT, x11.workspace_count, values);
+		x11.workspace_urgency_dirty = false;
+	}
+	free(values);
 	xcb_flush(x11.connection);
 }
 
@@ -374,19 +398,19 @@ static bool has_atom_hint(const xcb_get_property_reply_t *reply, enum ewmh_atom 
 	return false;
 }
 
-static void set_fullscreen_hint(struct x11_view *view, bool fullscreen) {
-	if (view->fullscreen_hint == fullscreen) {
+static void set_state_hint(struct x11_view *view, enum ewmh_atom hint, bool *current, bool enabled) {
+	if (*current == enabled) {
 		return;
 	}
-	xcb_atom_t property = x11.ewmh[NET_WM_STATE], atom = x11.ewmh[NET_WM_STATE_FULLSCREEN];
+	xcb_atom_t property = x11.ewmh[NET_WM_STATE], atom = x11.ewmh[hint];
 	xcb_get_property_cookie_t cookie = xcb_get_property(x11.connection, false, view->id,
 		property, XCB_ATOM_ATOM, 0, UINT32_MAX);
 	xcb_get_property_reply_t *reply = xcb_get_property_reply(x11.connection, cookie, NULL);
-	bool has_fullscreen = has_atom_hint(reply, NET_WM_STATE_FULLSCREEN, NET_WM_STATE_FULLSCREEN);
-	if (fullscreen && !has_fullscreen) {
+	bool present = has_atom_hint(reply, hint, hint);
+	if (enabled && !present) {
 		uint8_t mode = is_atom_list(reply) ? XCB_PROP_MODE_APPEND : XCB_PROP_MODE_REPLACE;
 		xcb_change_property(x11.connection, mode, view->id, property, XCB_ATOM_ATOM, 32, 1, &atom);
-	} else if (!fullscreen && has_fullscreen) {
+	} else if (!enabled && present) {
 		xcb_atom_t *atoms = xcb_get_property_value(reply);
 		uint32_t kept = 0;
 		for (uint32_t i = 0; i < reply->value_len; i++) {
@@ -398,7 +422,24 @@ static void set_fullscreen_hint(struct x11_view *view, bool fullscreen) {
 			property, XCB_ATOM_ATOM, 32, kept, atoms);
 	}
 	free(reply);
-	view->fullscreen_hint = fullscreen;
+	*current = enabled;
+}
+
+static bool read_urgency_hint(xcb_get_property_cookie_t cookie) {
+	xcb_icccm_wm_hints_t hints;
+	return xcb_icccm_get_wm_hints_reply(x11.connection, cookie, &hints, NULL) &&
+		xcb_icccm_wm_hints_get_urgency(&hints);
+}
+
+static bool view_is_urgent(const struct x11_view *view) {
+	return view->urgency_hint || view->demands_attention;
+}
+
+static void notify_urgency_change(struct x11_view *view, bool previous) {
+	bool urgent = view_is_urgent(view);
+	if (previous != urgent && x11.callbacks.urgent) {
+		x11.callbacks.urgent(view->id, urgent);
+	}
 }
 
 static void read_window_properties(struct x11_view *view) {
@@ -407,6 +448,7 @@ static void read_window_properties(struct x11_view *view) {
 	xcb_get_property_cookie_t class = xcb_icccm_get_wm_class(x11.connection, id);
 	xcb_get_property_cookie_t transient = xcb_icccm_get_wm_transient_for(x11.connection, id);
 	xcb_get_property_cookie_t normal = xcb_icccm_get_wm_normal_hints(x11.connection, id);
+	xcb_get_property_cookie_t hints_cookie = xcb_icccm_get_wm_hints(x11.connection, id);
 	xcb_get_property_cookie_t types = xcb_get_property(x11.connection, false, id,
 		x11.ewmh[NET_WM_WINDOW_TYPE], XCB_ATOM_ATOM, 0, 32);
 	xcb_get_property_cookie_t states = xcb_get_property(x11.connection, false, id,
@@ -431,11 +473,14 @@ static void read_window_properties(struct x11_view *view) {
 		(hints.flags & size_flags) == size_flags &&
 		hints.min_width > 0 && hints.min_height > 0 &&
 		hints.min_width == hints.max_width && hints.min_height == hints.max_height;
+	view->urgency_hint = read_urgency_hint(hints_cookie);
 	xcb_get_property_reply_t *type_reply = xcb_get_property_reply(x11.connection, types, NULL);
 	xcb_get_property_reply_t *state_reply = xcb_get_property_reply(x11.connection, states, NULL);
 	bool floating_type = has_atom_hint(type_reply, NET_WM_WINDOW_TYPE_DIALOG, NET_WM_WINDOW_TYPE_TOOLBAR);
 	bool modal = has_atom_hint(state_reply, NET_WM_STATE_MODAL, NET_WM_STATE_MODAL);
 	view->fullscreen_hint = has_atom_hint(state_reply, NET_WM_STATE_FULLSCREEN, NET_WM_STATE_FULLSCREEN);
+	view->demands_attention = has_atom_hint(state_reply, NET_WM_STATE_DEMANDS_ATTENTION,
+		NET_WM_STATE_DEMANDS_ATTENTION);
 	view->wants_float = has_parent || fixed_size || floating_type || modal;
 	free(type_reply);
 	free(state_reply);
@@ -474,8 +519,9 @@ static void manage(xcb_window_t id, bool existing) {
 	view->next = x11.views;
 	x11.views = view;
 	set_wm_state(id, mapped ? XCB_ICCCM_WM_STATE_NORMAL : XCB_ICCCM_WM_STATE_ICONIC);
-	uint32_t crossings = XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW;
-	xcb_change_window_attributes(x11.connection, id, XCB_CW_EVENT_MASK, &crossings);
+	uint32_t events = XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW |
+		XCB_EVENT_MASK_PROPERTY_CHANGE;
+	xcb_change_window_attributes(x11.connection, id, XCB_CW_EVENT_MASK, &events);
 	grab_focus_clicks(id);
 	/* Seed the Haskell state before the first placement to avoid a tiled frame. */
 	if (view->fullscreen_hint && x11.callbacks.fullscreen) {
@@ -484,6 +530,7 @@ static void manage(xcb_window_t id, bool existing) {
 	if (x11.callbacks.mapped) {
 		x11.callbacks.mapped(id);
 	}
+	notify_urgency_change(view, false);
 }
 
 static void unmanage(xcb_window_t id, bool destroyed) {
@@ -627,25 +674,35 @@ static void configure_request(const xcb_configure_request_event_t *event) {
 	xcb_configure_window(x11.connection, event->window, event->value_mask, values);
 }
 
-static void fullscreen_request(const xcb_client_message_event_t *message) {
-	struct x11_view *view = find_view(message->window);
-	xcb_atom_t atom = x11.ewmh[NET_WM_STATE_FULLSCREEN];
-	if (!view || !x11.callbacks.fullscreen ||
-			(message->data.data32[1] != atom && message->data.data32[2] != atom)) {
-		return;
-	}
+enum ewmh_state_action { STATE_REMOVE, STATE_ADD, STATE_TOGGLE };
 
-	enum { REMOVE, ADD, TOGGLE };
+static bool requested_state(uint32_t action, bool present) {
+	return action == STATE_TOGGLE ? !present : action == STATE_ADD;
+}
+
+static void state_request(const xcb_client_message_event_t *message) {
+	struct x11_view *view = find_view(message->window);
 	uint32_t action = message->data.data32[0];
-	if (action > TOGGLE) {
+	if (!view || action > STATE_TOGGLE) {
 		return;
 	}
-	bool fullscreen = action == TOGGLE ? !view->fullscreen_hint : action == ADD;
-	if (!view->mapped) {
-		/* The shared layout applies geometry only when this workspace is shown. */
-		set_fullscreen_hint(view, fullscreen);
+	xcb_atom_t first = message->data.data32[1], second = message->data.data32[2];
+	xcb_atom_t fullscreen_atom = x11.ewmh[NET_WM_STATE_FULLSCREEN];
+	xcb_atom_t attention_atom = x11.ewmh[NET_WM_STATE_DEMANDS_ATTENTION];
+	if (x11.callbacks.fullscreen && (first == fullscreen_atom || second == fullscreen_atom)) {
+		bool fullscreen = requested_state(action, view->fullscreen_hint);
+		if (!view->mapped) {
+			/* Geometry is applied when this workspace is shown. */
+			set_state_hint(view, NET_WM_STATE_FULLSCREEN, &view->fullscreen_hint, fullscreen);
+		}
+		x11.callbacks.fullscreen(view->id, fullscreen);
 	}
-	x11.callbacks.fullscreen(view->id, fullscreen);
+	if (first == attention_atom || second == attention_atom) {
+		bool previous = view_is_urgent(view);
+		bool attention = view->id != x11.focused && requested_state(action, view->demands_attention);
+		set_state_hint(view, NET_WM_STATE_DEMANDS_ATTENTION, &view->demands_attention, attention);
+		notify_urgency_change(view, previous);
+	}
 }
 
 static void configure_view(const struct x11_view *view, struct x11_rect rect);
@@ -761,11 +818,21 @@ static void dispatch(xcb_generic_event_t *event) {
 			break;
 		}
 		if (message->type == x11.ewmh[NET_WM_STATE]) {
-			fullscreen_request(message);
+			state_request(message);
 		} else if (message->window == x11.root && message->type == x11.ewmh[NET_CURRENT_DESKTOP] &&
 				message->data.data32[0] < x11.workspace_count &&
 				x11.callbacks.workspace_activate) {
 			x11.callbacks.workspace_activate(x11.workspaces[message->data.data32[0]].tag);
+		}
+		break;
+	}
+	case XCB_PROPERTY_NOTIFY: {
+		xcb_property_notify_event_t *property = (void *)event;
+		struct x11_view *view = property->atom == XCB_ATOM_WM_HINTS ? find_view(property->window) : NULL;
+		if (view) {
+			bool previous = view_is_urgent(view);
+			view->urgency_hint = read_urgency_hint(xcb_icccm_get_wm_hints(x11.connection, view->id));
+			notify_urgency_change(view, previous);
 		}
 		break;
 	}
@@ -915,6 +982,7 @@ failed:
 void wh_x11_shutdown(void) {
 	wl_event_source_remove(x11.events);
 	xcb_delete_property(x11.connection, x11.root, x11.ewmh[D77_WORKSPACE_COUNTS]);
+	xcb_delete_property(x11.connection, x11.root, x11.ewmh[D77_WORKSPACE_URGENT]);
 	for (unsigned i = 0; i < NET_WM_NAME; i++) {
 		xcb_delete_property(x11.connection, x11.root, x11.ewmh[i]);
 	}
@@ -995,7 +1063,7 @@ void wh_x11_set_mode(wh_view_id id, int mode) {
 	if (!view) {
 		return;
 	}
-	set_fullscreen_hint(view, mode == WH_VIEW_FULLSCREEN);
+	set_state_hint(view, NET_WM_STATE_FULLSCREEN, &view->fullscreen_hint, mode == WH_VIEW_FULLSCREEN);
 	if ((int)view->mode != mode) {
 		if (mode != WH_VIEW_FLOATING) {
 			cancel_drag(id);
@@ -1043,6 +1111,11 @@ void wh_x11_set_visible(wh_view_id id, int visible) {
 void wh_x11_focus(wh_view_id id) {
 	struct x11_view *focused = find_view(id);
 	wh_view_id next = focused && focused->mapped ? id : XCB_NONE;
+	if (next) {
+		/* Haskell clears its urgency when the window receives focus. */
+		focused->urgency_hint = false;
+		set_state_hint(focused, NET_WM_STATE_DEMANDS_ATTENTION, &focused->demands_attention, false);
+	}
 	if (next != x11.focused) {
 		if (x11.focused) {
 			grab_focus_clicks(x11.focused);

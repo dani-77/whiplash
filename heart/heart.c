@@ -1736,6 +1736,7 @@ void wh_workspace_set_active(int tag) {
 
 void wh_workspace_set_urgent(int tag, int on) {
 	if (backend == WH_BACKEND_X11) {
+		wh_x11_set_workspace_urgent(tag, on);
 		return;
 	}
 	struct wh_workspace *ws;
@@ -2563,6 +2564,7 @@ static int start_x11(void) {
 		.clicked = cb_view_clicked,
 		.entered = cb_view_entered,
 		.fullscreen = cb_view_fullscreen,
+		.urgent = cb_view_urgent,
 		.grab = cb_view_grab,
 		.moved = cb_view_moved,
 		.key = cb_key,

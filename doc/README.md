@@ -88,6 +88,12 @@ It shares the TOML config and reload with Wayland. The X server supplies the key
 An explicit TOML `autostart` works on both backends. The compiled-in Utumno autostart
 belongs to Wayland.
 
+The X11 login entry starts the system installation of ATG if present. It reserves
+48 pixels for the bar because ATG uses an override-redirect window. Set
+`WHIPLASH_X11_RESERVE_TOP` to override the reservation. ATG reads the workspace
+number, names and selection via EWMH. Its clicks request a workspace change
+through the same workspace action used by the keyboard bindings.
+
 ## Testing without touching your session
 
 Run whiplash headless, drive it with virtual input and capture it with grim:
@@ -127,7 +133,11 @@ used `-n` and the same TOML with two workspaces and only `Tall` enabled.
   The default run used wtype for the bindings and grim to check geometry, visibility
   and focus borders. XWayland was unavailable in the test environment.
 
-The native Xorg login was tested through greetd. ATG and the ISO are pending.
+The initial native Xorg session was also tested through greetd. The ATG integration
+was tested on an isolated X server with `wmctrl -d`, `wmctrl -s`, direct clicks
+on the bar and keyboard workspace changes. The panel highlight tracked the
+active workspace, and normal windows were tiled below the 48-pixel reservation.
+The Wayland tests above were repeated after adding ATG. The ISO is pending.
 
 ## Protocols and features
 

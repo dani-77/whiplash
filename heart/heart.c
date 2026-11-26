@@ -1693,6 +1693,10 @@ static void workspace_commit(struct wl_listener *listener, void *data) {
 }
 
 void wh_workspace_add(int tag, const char *name) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_add_workspace(tag, name);
+		return;
+	}
 	if (!server.workspace_mgr) {
 		return;
 	}
@@ -1715,6 +1719,7 @@ void wh_workspace_add(int tag, const char *name) {
 
 void wh_workspace_set_active(int tag) {
 	if (backend == WH_BACKEND_X11) {
+		wh_x11_set_active_workspace(tag);
 		return;
 	}
 	struct wh_workspace *ws;
@@ -2541,6 +2546,7 @@ static int start_x11(void) {
 		.unmapped = cb_view_unmapped,
 		.key = cb_key,
 		.outputs_changed = cb_outputs_changed,
+		.workspace_activate = cb_workspace_activate,
 	};
 	int status = wh_x11_init(server.wl_display, callbacks);
 	if (status != 0) {

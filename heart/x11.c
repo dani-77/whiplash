@@ -5,6 +5,7 @@
 #include "x11.h"
 
 #include <stdbool.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,24 @@ struct x11_view {
 	char *app_id;
 };
 
+struct x11_workspace {
+	int tag;
+	char *name;
+};
+
+/* All atoms before NET_WM_NAME are properties owned on the root window. */
+enum ewmh_atom {
+	NET_SUPPORTED, NET_SUPPORTING_WM_CHECK, NET_NUMBER_OF_DESKTOPS,
+	NET_CURRENT_DESKTOP, NET_DESKTOP_NAMES, NET_DESKTOP_GEOMETRY,
+	NET_DESKTOP_VIEWPORT, NET_WORKAREA, NET_WM_NAME, UTF8_STRING, EWMH_COUNT,
+};
+
+static const char *const ewmh_names[] = {
+	"_NET_SUPPORTED", "_NET_SUPPORTING_WM_CHECK", "_NET_NUMBER_OF_DESKTOPS",
+	"_NET_CURRENT_DESKTOP", "_NET_DESKTOP_NAMES", "_NET_DESKTOP_GEOMETRY",
+	"_NET_DESKTOP_VIEWPORT", "_NET_WORKAREA", "_NET_WM_NAME", "UTF8_STRING",
+};
+
 static struct {
 	xcb_connection_t *connection;
 	xcb_window_t root;
@@ -36,7 +55,11 @@ static struct {
 	uint32_t *bindings;
 	unsigned binding_count;
 	xcb_atom_t wm_state, wm_protocols, wm_delete_window;
-	int width, height;
+	xcb_atom_t ewmh[EWMH_COUNT];
+	xcb_window_t wm_check;
+	struct x11_workspace *workspaces;
+	uint32_t workspace_count, published_count, current_desktop;
+	int width, height, reserve_top;
 	int border_width;
 	uint32_t focused_border, normal_border;
 } x11;
@@ -56,6 +79,128 @@ static xcb_atom_t intern_atom(const char *name) {
 	xcb_atom_t atom = reply ? reply->atom : XCB_ATOM_NONE;
 	free(reply);
 	return atom;
+}
+
+static void set_root_cardinals(enum ewmh_atom property, uint32_t count, const uint32_t *values) {
+	xcb_change_property(x11.connection, XCB_PROP_MODE_REPLACE, x11.root,
+		x11.ewmh[property], XCB_ATOM_CARDINAL, 32, count, values);
+}
+
+static int usable_top(void) {
+	return x11.reserve_top < x11.height ? x11.reserve_top : x11.height - 1;
+}
+
+static int read_reserve_top(void) {
+	const char *value = getenv("WHIPLASH_X11_RESERVE_TOP");
+	if (!value || !*value) {
+		return 0;
+	}
+	char *end;
+	errno = 0;
+	long top = strtol(value, &end, 10);
+	if (errno || *end || top < 0 || top > UINT16_MAX) {
+		fprintf(stderr, "whiplash: invalid WHIPLASH_X11_RESERVE_TOP: %s\n", value);
+		return 0;
+	}
+	return top;
+}
+
+static void publish_desktop_geometry(void) {
+	uint32_t size[] = {x11.width, x11.height};
+	set_root_cardinals(NET_DESKTOP_GEOMETRY, 2, size);
+	uint32_t count = x11.workspace_count;
+	if (!count) {
+		return;
+	}
+	uint32_t *rects = calloc(count, 4 * sizeof(*rects));
+	if (!rects) {
+		return;
+	}
+	set_root_cardinals(NET_DESKTOP_VIEWPORT, 2 * count, rects);
+	int top = usable_top();
+	for (uint32_t i = 0; i < count; i++) {
+		rects[4 * i + 1] = top;
+		rects[4 * i + 2] = x11.width;
+		rects[4 * i + 3] = x11.height - top;
+	}
+	set_root_cardinals(NET_WORKAREA, 4 * count, rects);
+	free(rects);
+}
+
+static bool init_ewmh(void) {
+	for (unsigned i = 0; i < EWMH_COUNT; i++) {
+		x11.ewmh[i] = intern_atom(ewmh_names[i]);
+		if (!x11.ewmh[i]) {
+			return false;
+		}
+	}
+	x11.current_desktop = UINT32_MAX;
+	x11.wm_check = xcb_generate_id(x11.connection);
+	xcb_create_window(x11.connection, XCB_COPY_FROM_PARENT, x11.wm_check, x11.root,
+		0, 0, 1, 1, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, XCB_COPY_FROM_PARENT, 0, NULL);
+	const char wm_name[] = "Whiplash";
+	xcb_change_property(x11.connection, XCB_PROP_MODE_REPLACE, x11.wm_check,
+		x11.ewmh[NET_WM_NAME], x11.ewmh[UTF8_STRING], 8, sizeof(wm_name) - 1, wm_name);
+	xcb_window_t check_windows[] = {x11.wm_check, x11.root};
+	for (unsigned i = 0; i < 2; i++) {
+		xcb_change_property(x11.connection, XCB_PROP_MODE_REPLACE, check_windows[i],
+			x11.ewmh[NET_SUPPORTING_WM_CHECK], XCB_ATOM_WINDOW, 32, 1, &x11.wm_check);
+	}
+	xcb_change_property(x11.connection, XCB_PROP_MODE_REPLACE, x11.root,
+		x11.ewmh[NET_SUPPORTED], XCB_ATOM_ATOM, 32, UTF8_STRING, x11.ewmh);
+	return true;
+}
+
+void wh_x11_add_workspace(int tag, const char *name) {
+	char *copy = strdup(name);
+	if (!copy) {
+		return;
+	}
+	struct x11_workspace *ws = realloc(x11.workspaces, (x11.workspace_count + 1) * sizeof(*ws));
+	if (!ws) {
+		free(copy);
+		return;
+	}
+	x11.workspaces = ws;
+	ws[x11.workspace_count++] = (struct x11_workspace){tag, copy};
+}
+
+static void publish_workspace_list(void) {
+	size_t length = 0;
+	for (uint32_t i = 0; i < x11.workspace_count; i++) {
+		length += strlen(x11.workspaces[i].name) + 1;
+	}
+	char *names = malloc(length);
+	if (!names) {
+		return;
+	}
+	char *end = names;
+	for (uint32_t i = 0; i < x11.workspace_count; i++) {
+		const char *name = x11.workspaces[i].name;
+		size_t n = strlen(name) + 1;
+		memcpy(end, name, n);
+		end += n;
+	}
+	xcb_change_property(x11.connection, XCB_PROP_MODE_REPLACE, x11.root,
+		x11.ewmh[NET_DESKTOP_NAMES], x11.ewmh[UTF8_STRING], 8, length, names);
+	free(names);
+	publish_desktop_geometry();
+	set_root_cardinals(NET_NUMBER_OF_DESKTOPS, 1, &x11.workspace_count);
+	x11.published_count = x11.workspace_count;
+}
+
+void wh_x11_set_active_workspace(int tag) {
+	if (x11.workspace_count != x11.published_count) {
+		publish_workspace_list();
+	}
+	for (uint32_t i = 0; i < x11.workspace_count; i++) {
+		if (x11.workspaces[i].tag == tag && i != x11.current_desktop) {
+			x11.current_desktop = i;
+			set_root_cardinals(NET_CURRENT_DESKTOP, 1, &i);
+			xcb_flush(x11.connection);
+			return;
+		}
+	}
 }
 
 static void set_wm_state(xcb_window_t id, uint32_t state) {
@@ -272,9 +417,19 @@ static void dispatch(xcb_generic_event_t *event) {
 				(configure->width != x11.width || configure->height != x11.height)) {
 			x11.width = configure->width;
 			x11.height = configure->height;
+			publish_desktop_geometry();
 			if (x11.callbacks.outputs_changed) {
 				x11.callbacks.outputs_changed();
 			}
+		}
+		break;
+	}
+	case XCB_CLIENT_MESSAGE: {
+		xcb_client_message_event_t *message = (void *)event;
+		if (message->window == x11.root && message->type == x11.ewmh[NET_CURRENT_DESKTOP] &&
+				message->format == 32 && message->data.data32[0] < x11.workspace_count &&
+				x11.callbacks.workspace_activate) {
+			x11.callbacks.workspace_activate(x11.workspaces[message->data.data32[0]].tag);
 		}
 		break;
 	}
@@ -328,6 +483,7 @@ int wh_x11_init(struct wl_display *display, struct wh_x11_callbacks callbacks) {
 	x11.root = screens.data->root;
 	x11.width = screens.data->width_in_pixels;
 	x11.height = screens.data->height_in_pixels;
+	x11.reserve_top = read_reserve_top();
 
 	uint32_t mask = XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
 		XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
@@ -354,6 +510,10 @@ int wh_x11_init(struct wl_display *display, struct wh_x11_callbacks callbacks) {
 	x11.events = wl_event_loop_add_fd(wl_display_get_event_loop(display),
 		xcb_get_file_descriptor(x11.connection), WL_EVENT_READABLE, events_ready, NULL);
 	if (!x11.events) {
+		goto failed;
+	}
+	if (!init_ewmh()) {
+		wl_event_source_remove(x11.events);
 		goto failed;
 	}
 	/* A synchronous XCB reply can already have pulled events off the fd. */
@@ -385,6 +545,13 @@ failed:
 
 void wh_x11_shutdown(void) {
 	wl_event_source_remove(x11.events);
+	for (unsigned i = 0; i < NET_WM_NAME; i++) {
+		xcb_delete_property(x11.connection, x11.root, x11.ewmh[i]);
+	}
+	for (uint32_t i = 0; i < x11.workspace_count; i++) {
+		free(x11.workspaces[i].name);
+	}
+	free(x11.workspaces);
 	while (x11.views) {
 		struct x11_view *view = x11.views;
 		x11.views = view->next;
@@ -396,7 +563,9 @@ void wh_x11_shutdown(void) {
 	}
 	free(x11.keymap);
 	free(x11.bindings);
-	xcb_flush(x11.connection);
+	/* Wait for the server to apply property cleanup and remap hidden clients
+	 * before closing the connection. */
+	free(xcb_get_input_focus_reply(x11.connection, xcb_get_input_focus(x11.connection), NULL));
 	xcb_disconnect(x11.connection);
 }
 
@@ -406,7 +575,9 @@ int wh_x11_output_info(int index, int *out) {
 	}
 	int rect[] = {0, 0, x11.width, x11.height};
 	memcpy(out, rect, sizeof(rect));
-	memcpy(out + 4, rect, sizeof(rect));
+	int top = usable_top();
+	int usable[] = {0, top, x11.width, x11.height - top};
+	memcpy(out + 4, usable, sizeof(usable));
 	return 0;
 }
 

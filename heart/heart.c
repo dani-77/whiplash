@@ -380,6 +380,12 @@ void wh_set_bindings(const uint32_t *pairs, unsigned count) {
 	}
 }
 
+void wh_set_focus_follows_mouse(int enabled) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_set_focus_follows_mouse(enabled);
+	}
+}
+
 void wh_on_view_mapped(wh_view_cb cb) { cb_view_mapped = cb; }
 void wh_on_view_unmapped(wh_view_cb cb) { cb_view_unmapped = cb; }
 void wh_on_view_clicked(wh_view_cb cb) { cb_view_clicked = cb; }
@@ -2545,6 +2551,7 @@ static int start_x11(void) {
 		.mapped = cb_view_mapped,
 		.unmapped = cb_view_unmapped,
 		.clicked = cb_view_clicked,
+		.entered = cb_view_entered,
 		.key = cb_key,
 		.outputs_changed = cb_outputs_changed,
 		.workspace_activate = cb_workspace_activate,

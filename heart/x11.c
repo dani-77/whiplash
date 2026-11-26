@@ -49,7 +49,8 @@ static struct {
 	struct wl_event_source *events;
 	struct wh_x11_callbacks callbacks;
 	struct x11_view *views;
-	wh_view_id focused;
+	wh_view_id focused, hovered;
+	bool focus_follows_mouse, hover_focus;
 	xcb_get_keyboard_mapping_reply_t *keymap;
 	uint8_t first_keycode, last_keycode;
 	uint16_t lock_mask;
@@ -72,6 +73,42 @@ static struct x11_view *find_view(wh_view_id id) {
 		}
 	}
 	return NULL;
+}
+
+static wh_view_id view_under_pointer(void) {
+	xcb_query_pointer_reply_t *pointer = xcb_query_pointer_reply(x11.connection,
+		xcb_query_pointer(x11.connection, x11.root), NULL);
+	wh_view_id id = pointer && pointer->same_screen ? pointer->child : XCB_NONE;
+	free(pointer);
+	struct x11_view *view = find_view(id);
+	return view && view->mapped ? id : XCB_NONE;
+}
+
+static void pointer_crossed(const xcb_enter_notify_event_t *event, bool entered) {
+	if (!x11.focus_follows_mouse || event->mode != XCB_NOTIFY_MODE_NORMAL ||
+			event->detail == XCB_NOTIFY_DETAIL_INFERIOR) {
+		return;
+	}
+	wh_view_id id = event->event;
+	if (!entered) {
+		if (x11.hovered == id && view_under_pointer() != id) {
+			x11.hovered = XCB_NONE;
+		}
+		return;
+	}
+	if (x11.hovered == id || view_under_pointer() != id) {
+		return;
+	}
+	x11.hovered = id;
+	if (id != x11.focused && x11.callbacks.entered) {
+		x11.hover_focus = true;
+		x11.callbacks.entered(id);
+		x11.hover_focus = false;
+	}
+}
+
+void wh_x11_set_focus_follows_mouse(int enabled) {
+	x11.focus_follows_mouse = enabled != 0;
 }
 
 static xcb_atom_t intern_atom(const char *name) {
@@ -267,6 +304,8 @@ static void manage(xcb_window_t id, bool existing) {
 	view->next = x11.views;
 	x11.views = view;
 	set_wm_state(id, mapped ? XCB_ICCCM_WM_STATE_NORMAL : XCB_ICCCM_WM_STATE_ICONIC);
+	uint32_t crossings = XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW;
+	xcb_change_window_attributes(x11.connection, id, XCB_CW_EVENT_MASK, &crossings);
 	grab_focus_clicks(id);
 	if (x11.callbacks.mapped) {
 		x11.callbacks.mapped(id);
@@ -289,6 +328,8 @@ static void unmanage(xcb_window_t id, bool destroyed) {
 	free(view->app_id);
 	free(view);
 	if (!destroyed) {
+		uint32_t mask = XCB_EVENT_MASK_NO_EVENT;
+		xcb_change_window_attributes(x11.connection, id, XCB_CW_EVENT_MASK, &mask);
 		ungrab_focus_clicks(id);
 		xcb_delete_property(x11.connection, id, x11.wm_state);
 	}
@@ -472,6 +513,12 @@ static void dispatch(xcb_generic_event_t *event) {
 		xcb_allow_events(x11.connection, XCB_ALLOW_REPLAY_POINTER, button->time);
 		break;
 	}
+	case XCB_ENTER_NOTIFY:
+		pointer_crossed((void *)event, true);
+		break;
+	case XCB_LEAVE_NOTIFY:
+		pointer_crossed((void *)event, false);
+		break;
 	case XCB_MAPPING_NOTIFY: {
 		xcb_mapping_notify_event_t *mapping = (void *)event;
 		if (mapping->request != XCB_MAPPING_POINTER) {
@@ -670,13 +717,17 @@ void wh_x11_focus(wh_view_id id) {
 		uint32_t pixel = view == focused ? x11.focused_border : x11.normal_border;
 		xcb_change_window_attributes(x11.connection, view->id, XCB_CW_BORDER_PIXEL, &pixel);
 	}
-	xcb_window_t target = x11.root;
-	if (next) {
+	if (next && !x11.hover_focus) {
 		uint32_t above = XCB_STACK_MODE_ABOVE;
 		xcb_configure_window(x11.connection, id, XCB_CONFIG_WINDOW_STACK_MODE, &above);
-		target = id;
 	}
-	xcb_set_input_focus(x11.connection, XCB_INPUT_FOCUS_POINTER_ROOT, target, XCB_CURRENT_TIME);
+	xcb_set_input_focus(x11.connection, XCB_INPUT_FOCUS_POINTER_ROOT,
+		next ? next : x11.root, XCB_CURRENT_TIME);
+	if (x11.focus_follows_mouse) {
+		/* The layout can move a window under a still pointer. The crossings
+		 * queued by that relayout must leave the chosen focus in place. */
+		x11.hovered = view_under_pointer();
+	}
 	xcb_flush(x11.connection);
 }
 

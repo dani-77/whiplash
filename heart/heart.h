@@ -90,6 +90,8 @@ int wh_view_wants_float(wh_view_id id);
 int wh_view_natural_width(wh_view_id id);
 int wh_view_natural_height(wh_view_id id);
 void wh_set_mouse_mod(uint32_t mods);
+/* Enable crossing tracking on the X11 backend. */
+void wh_set_focus_follows_mouse(int enabled);
 /* Announce a workspace to bars (after wh_init), and which one is shown. */
 void wh_workspace_add(int tag, const char *name);
 void wh_workspace_set_active(int tag);

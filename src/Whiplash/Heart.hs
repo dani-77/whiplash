@@ -27,6 +27,7 @@ module Whiplash.Heart
   , appId
   , naturalSize
   , setMouseMod
+  , setFocusFollowsMouse
   , onWorkspaceActivate
   , addWorkspace
   , setActiveWorkspace
@@ -115,6 +116,7 @@ foreign import ccall unsafe "wh_view_wants_float" c_wants_float :: Word32 -> IO 
 foreign import ccall unsafe "wh_view_natural_width" c_natural_width :: Word32 -> IO CInt
 foreign import ccall unsafe "wh_view_natural_height" c_natural_height :: Word32 -> IO CInt
 foreign import ccall unsafe "wh_set_mouse_mod" c_set_mouse_mod :: Word32 -> IO ()
+foreign import ccall unsafe "wh_set_focus_follows_mouse" c_set_focus_follows_mouse :: CInt -> IO ()
 foreign import ccall unsafe "wh_on_workspace_activate" c_on_workspace_activate :: FunPtr CTagCb -> IO ()
 foreign import ccall unsafe "wh_workspace_add" c_workspace_add :: CInt -> CString -> IO ()
 foreign import ccall unsafe "wh_workspace_set_active" c_workspace_set_active :: CInt -> IO ()
@@ -226,6 +228,9 @@ naturalSize v = do
 
 setMouseMod :: Word32 -> IO ()
 setMouseMod = c_set_mouse_mod
+
+setFocusFollowsMouse :: Bool -> IO ()
+setFocusFollowsMouse enabled = c_set_focus_follows_mouse (if enabled then 1 else 0)
 
 -- | A bar asked to switch to this workspace.
 onWorkspaceActivate :: (Int -> IO ()) -> IO ()

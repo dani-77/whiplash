@@ -60,6 +60,7 @@ complain msg = do
 applyToHeart :: H.Backend -> Config -> IO ()
 applyToHeart backend cfg = do
   H.setBorder (borderWidth cfg) (focusedBorderColor cfg) (normalBorderColor cfg)
+  when (backend == H.X11) (H.setFocusFollowsMouse (focusFollowsMouse cfg))
   when (backend == H.Wayland) $ do
     H.setMouseMod (modMask cfg)
     H.setOutputRules (outputRules cfg)

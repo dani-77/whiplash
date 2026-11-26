@@ -2552,6 +2552,7 @@ static int start_x11(void) {
 		.unmapped = cb_view_unmapped,
 		.clicked = cb_view_clicked,
 		.entered = cb_view_entered,
+		.fullscreen = cb_view_fullscreen,
 		.key = cb_key,
 		.outputs_changed = cb_outputs_changed,
 		.workspace_activate = cb_workspace_activate,

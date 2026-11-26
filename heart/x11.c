@@ -18,7 +18,7 @@
 struct x11_view {
 	struct x11_view *next;
 	xcb_window_t id;
-	bool mapped, wants_float;
+	bool mapped, wants_float, fullscreen_hint;
 	enum wh_view_mode mode;
 	unsigned pending_unmaps;
 	int natural_width, natural_height;
@@ -34,19 +34,21 @@ struct x11_workspace {
 enum ewmh_atom {
 	NET_SUPPORTED, NET_SUPPORTING_WM_CHECK, NET_NUMBER_OF_DESKTOPS,
 	NET_CURRENT_DESKTOP, NET_DESKTOP_NAMES, NET_DESKTOP_GEOMETRY,
-	NET_DESKTOP_VIEWPORT, NET_WORKAREA, NET_WM_NAME, UTF8_STRING,
+	NET_DESKTOP_VIEWPORT, NET_WORKAREA, NET_WM_NAME,
+	NET_WM_STATE, NET_WM_STATE_FULLSCREEN, UTF8_STRING,
 	NET_WM_WINDOW_TYPE, NET_WM_WINDOW_TYPE_DIALOG, NET_WM_WINDOW_TYPE_UTILITY,
 	NET_WM_WINDOW_TYPE_SPLASH, NET_WM_WINDOW_TYPE_TOOLBAR,
-	NET_WM_STATE, NET_WM_STATE_MODAL, EWMH_COUNT,
+	NET_WM_STATE_MODAL, EWMH_COUNT,
 };
 
 static const char *const ewmh_names[] = {
 	"_NET_SUPPORTED", "_NET_SUPPORTING_WM_CHECK", "_NET_NUMBER_OF_DESKTOPS",
 	"_NET_CURRENT_DESKTOP", "_NET_DESKTOP_NAMES", "_NET_DESKTOP_GEOMETRY",
-	"_NET_DESKTOP_VIEWPORT", "_NET_WORKAREA", "_NET_WM_NAME", "UTF8_STRING",
+	"_NET_DESKTOP_VIEWPORT", "_NET_WORKAREA", "_NET_WM_NAME",
+	"_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN", "UTF8_STRING",
 	"_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DIALOG", "_NET_WM_WINDOW_TYPE_UTILITY",
 	"_NET_WM_WINDOW_TYPE_SPLASH", "_NET_WM_WINDOW_TYPE_TOOLBAR",
-	"_NET_WM_STATE", "_NET_WM_STATE_MODAL",
+	"_NET_WM_STATE_MODAL",
 };
 
 static struct {
@@ -270,19 +272,50 @@ static void ungrab_focus_clicks(xcb_window_t id) {
 	}
 }
 
-static bool has_atom_hint(xcb_get_property_cookie_t cookie, enum ewmh_atom first, enum ewmh_atom last) {
-	xcb_get_property_reply_t *reply = xcb_get_property_reply(x11.connection, cookie, NULL);
-	bool floating = false;
-	if (reply && reply->type == XCB_ATOM_ATOM && reply->format == 32) {
-		const xcb_atom_t *types = xcb_get_property_value(reply);
-		for (uint32_t i = 0; i < reply->value_len && !floating; i++) {
+static bool is_atom_list(const xcb_get_property_reply_t *reply) {
+	return reply && reply->type == XCB_ATOM_ATOM && reply->format == 32;
+}
+
+static bool has_atom_hint(const xcb_get_property_reply_t *reply, enum ewmh_atom first,
+		enum ewmh_atom last) {
+	if (is_atom_list(reply)) {
+		const xcb_atom_t *atoms = xcb_get_property_value(reply);
+		for (uint32_t i = 0; i < reply->value_len; i++) {
 			for (enum ewmh_atom hint = first; hint <= last; hint++) {
-				floating |= types[i] == x11.ewmh[hint];
+				if (atoms[i] == x11.ewmh[hint]) {
+					return true;
+				}
 			}
 		}
 	}
+	return false;
+}
+
+static void set_fullscreen_hint(struct x11_view *view, bool fullscreen) {
+	if (view->fullscreen_hint == fullscreen) {
+		return;
+	}
+	xcb_atom_t property = x11.ewmh[NET_WM_STATE], atom = x11.ewmh[NET_WM_STATE_FULLSCREEN];
+	xcb_get_property_cookie_t cookie = xcb_get_property(x11.connection, false, view->id,
+		property, XCB_ATOM_ATOM, 0, UINT32_MAX);
+	xcb_get_property_reply_t *reply = xcb_get_property_reply(x11.connection, cookie, NULL);
+	bool has_fullscreen = has_atom_hint(reply, NET_WM_STATE_FULLSCREEN, NET_WM_STATE_FULLSCREEN);
+	if (fullscreen && !has_fullscreen) {
+		uint8_t mode = is_atom_list(reply) ? XCB_PROP_MODE_APPEND : XCB_PROP_MODE_REPLACE;
+		xcb_change_property(x11.connection, mode, view->id, property, XCB_ATOM_ATOM, 32, 1, &atom);
+	} else if (!fullscreen && has_fullscreen) {
+		xcb_atom_t *atoms = xcb_get_property_value(reply);
+		uint32_t kept = 0;
+		for (uint32_t i = 0; i < reply->value_len; i++) {
+			if (atoms[i] != atom) {
+				atoms[kept++] = atoms[i];
+			}
+		}
+		xcb_change_property(x11.connection, XCB_PROP_MODE_REPLACE, view->id,
+			property, XCB_ATOM_ATOM, 32, kept, atoms);
+	}
 	free(reply);
-	return floating;
+	view->fullscreen_hint = fullscreen;
 }
 
 static void read_window_properties(struct x11_view *view) {
@@ -294,7 +327,7 @@ static void read_window_properties(struct x11_view *view) {
 	xcb_get_property_cookie_t types = xcb_get_property(x11.connection, false, id,
 		x11.ewmh[NET_WM_WINDOW_TYPE], XCB_ATOM_ATOM, 0, 32);
 	xcb_get_property_cookie_t states = xcb_get_property(x11.connection, false, id,
-		x11.ewmh[NET_WM_STATE], XCB_ATOM_ATOM, 0, 32);
+		x11.ewmh[NET_WM_STATE], XCB_ATOM_ATOM, 0, UINT32_MAX);
 	xcb_get_geometry_reply_t *geometry = xcb_get_geometry_reply(x11.connection, geom, NULL);
 	if (geometry) {
 		view->natural_width = geometry->width;
@@ -315,9 +348,14 @@ static void read_window_properties(struct x11_view *view) {
 		(hints.flags & size_flags) == size_flags &&
 		hints.min_width > 0 && hints.min_height > 0 &&
 		hints.min_width == hints.max_width && hints.min_height == hints.max_height;
-	bool floating_type = has_atom_hint(types, NET_WM_WINDOW_TYPE_DIALOG, NET_WM_WINDOW_TYPE_TOOLBAR);
-	bool modal = has_atom_hint(states, NET_WM_STATE_MODAL, NET_WM_STATE_MODAL);
+	xcb_get_property_reply_t *type_reply = xcb_get_property_reply(x11.connection, types, NULL);
+	xcb_get_property_reply_t *state_reply = xcb_get_property_reply(x11.connection, states, NULL);
+	bool floating_type = has_atom_hint(type_reply, NET_WM_WINDOW_TYPE_DIALOG, NET_WM_WINDOW_TYPE_TOOLBAR);
+	bool modal = has_atom_hint(state_reply, NET_WM_STATE_MODAL, NET_WM_STATE_MODAL);
+	view->fullscreen_hint = has_atom_hint(state_reply, NET_WM_STATE_FULLSCREEN, NET_WM_STATE_FULLSCREEN);
 	view->wants_float = has_parent || fixed_size || floating_type || modal;
+	free(type_reply);
+	free(state_reply);
 	if (fixed_size) {
 		view->natural_width = hints.min_width;
 		view->natural_height = hints.min_height;
@@ -356,6 +394,10 @@ static void manage(xcb_window_t id, bool existing) {
 	uint32_t crossings = XCB_EVENT_MASK_ENTER_WINDOW | XCB_EVENT_MASK_LEAVE_WINDOW;
 	xcb_change_window_attributes(x11.connection, id, XCB_CW_EVENT_MASK, &crossings);
 	grab_focus_clicks(id);
+	/* Seed the Haskell state before the first placement to avoid a tiled frame. */
+	if (view->fullscreen_hint && x11.callbacks.fullscreen) {
+		x11.callbacks.fullscreen(id, true);
+	}
 	if (x11.callbacks.mapped) {
 		x11.callbacks.mapped(id);
 	}
@@ -381,6 +423,7 @@ static void unmanage(xcb_window_t id, bool destroyed) {
 		xcb_change_window_attributes(x11.connection, id, XCB_CW_EVENT_MASK, &mask);
 		ungrab_focus_clicks(id);
 		xcb_delete_property(x11.connection, id, x11.wm_state);
+		xcb_delete_property(x11.connection, id, x11.ewmh[NET_WM_STATE]);
 	}
 	if (x11.callbacks.unmapped) {
 		x11.callbacks.unmapped(id);
@@ -499,6 +542,27 @@ static void configure_request(const xcb_configure_request_event_t *event) {
 	xcb_configure_window(x11.connection, event->window, event->value_mask, values);
 }
 
+static void fullscreen_request(const xcb_client_message_event_t *message) {
+	struct x11_view *view = find_view(message->window);
+	xcb_atom_t atom = x11.ewmh[NET_WM_STATE_FULLSCREEN];
+	if (!view || !x11.callbacks.fullscreen ||
+			(message->data.data32[1] != atom && message->data.data32[2] != atom)) {
+		return;
+	}
+
+	enum { REMOVE, ADD, TOGGLE };
+	uint32_t action = message->data.data32[0];
+	if (action > TOGGLE) {
+		return;
+	}
+	bool fullscreen = action == TOGGLE ? !view->fullscreen_hint : action == ADD;
+	if (!view->mapped) {
+		/* The shared layout applies geometry only when this workspace is shown. */
+		set_fullscreen_hint(view, fullscreen);
+	}
+	x11.callbacks.fullscreen(view->id, fullscreen);
+}
+
 static void dispatch(xcb_generic_event_t *event) {
 	switch (event->response_type & 0x7f) {
 	case XCB_MAP_REQUEST:
@@ -538,8 +602,13 @@ static void dispatch(xcb_generic_event_t *event) {
 	}
 	case XCB_CLIENT_MESSAGE: {
 		xcb_client_message_event_t *message = (void *)event;
-		if (message->window == x11.root && message->type == x11.ewmh[NET_CURRENT_DESKTOP] &&
-				message->format == 32 && message->data.data32[0] < x11.workspace_count &&
+		if (message->format != 32) {
+			break;
+		}
+		if (message->type == x11.ewmh[NET_WM_STATE]) {
+			fullscreen_request(message);
+		} else if (message->window == x11.root && message->type == x11.ewmh[NET_CURRENT_DESKTOP] &&
+				message->data.data32[0] < x11.workspace_count &&
 				x11.callbacks.workspace_activate) {
 			x11.callbacks.workspace_activate(x11.workspaces[message->data.data32[0]].tag);
 		}
@@ -750,7 +819,11 @@ static void raise_view(struct x11_view *view) {
 
 void wh_x11_set_mode(wh_view_id id, int mode) {
 	struct x11_view *view = find_view(id);
-	if (view && (int)view->mode != mode) {
+	if (!view) {
+		return;
+	}
+	set_fullscreen_hint(view, mode == WH_VIEW_FULLSCREEN);
+	if ((int)view->mode != mode) {
 		view->mode = mode;
 		if (view->mapped) {
 			raise_view(view);

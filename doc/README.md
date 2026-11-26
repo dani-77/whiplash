@@ -136,6 +136,12 @@ Haskell and refreshes the grabs on keymap changes and TOML reload.
   The shared Haskell code centers them and gives an explicit TOML `float` rule
   priority. The X11 backend raises windows within their layer, so floating dialogs
   stay above tiled windows and fullscreen windows stay above both.
+- **Fullscreen.** The backend advertises `_NET_WM_STATE_FULLSCREEN` and accepts
+  that hint at map time and via `_NET_WM_STATE` messages. Application requests and
+  keybindings use the same fullscreen state in Haskell. X11 updates the fullscreen
+  atom while preserving the other atoms in the window property. A fullscreen
+  window uses the whole screen without borders, including the space reserved for
+  the bar. On exit it returns to its tile or floating rectangle.
 - **Click focus.** Unfocused clients have passive grabs for buttons 1–3. A press is
   routed to the shared click callback. `ReplayPointer` then delivers the original
   click to the application. Wheel events and clicks on override-redirect surfaces
@@ -191,7 +197,9 @@ on the bar and keyboard workspace changes. The panel highlight tracked the
 active workspace, and normal windows were tiled below the 48-pixel reservation.
 Xephyr tests checked first-click delivery to application controls, hover without
 raising, hover changes on reload and focus with a stationary pointer during a
-layout change. The Wayland tests above were repeated after the X11 focus changes.
+layout change. Fullscreen was tested with `wmctrl`, the keyboard shortcut and
+`mpv`, including startup in fullscreen and placement after exiting it.
+The Wayland tests above were repeated after the X11 focus and fullscreen changes.
 
 On the test X11 display, use `wmctrl -d` to list desktops and
 `wmctrl -s 1` to select the second desktop. Use
@@ -373,6 +381,6 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
 ## Not done yet
 
 - Animations, rounded corners, blur.
-- Native X11 per-monitor work areas, mouse dragging, client fullscreen requests,
-  and occupied and urgent hints for the ATG bar.
+- Native X11 per-monitor work areas, mouse dragging, and occupied and urgent hints
+  for the ATG bar.
 - D77 ISO integration for the two sessions.

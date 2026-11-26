@@ -29,7 +29,7 @@ The name comes from Metallica's *Whiplash*.
   windows as the pointer enters them.
 - **Scratchpads** — a drop-down terminal (or any app) that one key shows and hides,
   without closing it, wherever you are.
-- **Fullscreen** for the focused window from a shortcut.
+- **Fullscreen** from a shortcut or at the application's request.
 - Works as a real login-screen session (greetd, SDDM, GDM, ...) or on a nested
   display for trying it out.
 
@@ -41,7 +41,6 @@ The name comes from Metallica's *Whiplash*.
   swipe to anything a key can do. Pinch zoom and other gestures still reach your apps.
 - **Mouse dragging** — hold the modifier and drag a window with the left button
   to move it, or with the right button to resize it.
-- **Fullscreen requests from applications** for videos, games and presentations.
 - **Touchpad that just works** — tap to click, tap and drag, and no stray clicks while
   you type, all on by default and adjustable in the config.
 - **Workspaces in your bar** — bars that support Wayland's standard workspace protocol

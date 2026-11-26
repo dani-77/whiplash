@@ -35,6 +35,9 @@ module Whiplash.Heart
   , setTouchpad
   , keysymFromName
   , watchConfig
+  , Backend (..)
+  , setBackend
+  , setBindings
   , heartInit
   , heartRun
   , heartQuit
@@ -49,8 +52,8 @@ module Whiplash.Heart
 
 import Data.Word (Word32)
 import Foreign.C.String (CString, peekCString, withCString)
-import Foreign.C.Types (CDouble (..), CFloat (..), CInt (..))
-import Foreign.Marshal.Array (allocaArray, peekArray)
+import Foreign.C.Types (CDouble (..), CFloat (..), CInt (..), CUInt (..))
+import Foreign.Marshal.Array (allocaArray, peekArray, withArray)
 import Foreign.Ptr (FunPtr, Ptr, nullPtr)
 
 type ViewId = Word32
@@ -67,6 +70,9 @@ data OutputInfo = OutputInfo
 
 data ViewMode = Tiled | Floating | Fullscreen
   deriving (Show, Eq, Enum)
+
+data Backend = Wayland | X11
+  deriving (Eq, Enum)
 
 type CViewCb = Word32 -> IO ()
 type CKeyCb = Word32 -> Word32 -> IO CInt
@@ -119,6 +125,8 @@ foreign import ccall unsafe "wh_set_touchpad" c_set_touchpad
   :: CInt -> CInt -> CInt -> CInt -> CInt -> CDouble -> CInt -> CInt -> IO ()
 foreign import ccall unsafe "wh_keysym_from_name" c_keysym_from_name :: CString -> IO Word32
 foreign import ccall unsafe "wh_watch_config" c_watch_config :: CString -> CString -> IO CInt
+foreign import ccall unsafe "wh_set_backend" c_set_backend :: CInt -> IO ()
+foreign import ccall unsafe "wh_set_bindings" c_set_bindings :: Ptr Word32 -> CUInt -> IO ()
 
 -- Calls that can re-enter Haskell through callbacks must be "safe".
 foreign import ccall safe "wh_init" c_init :: IO CInt
@@ -238,7 +246,14 @@ setWorkspaceUrgent t on = c_workspace_set_urgent (fromIntegral t) (if on then 1 
 setActiveWorkspace :: Int -> IO ()
 setActiveWorkspace = c_workspace_set_active . fromIntegral
 
--- | Start the backend. Returns False when wlroots could not start.
+setBackend :: Backend -> IO ()
+setBackend = c_set_backend . fromIntegral . fromEnum
+
+setBindings :: [(Word32, Word32)] -> IO ()
+setBindings bindings = withArray (concatMap (\(mods, sym) -> [mods, sym]) bindings) $ \pairs ->
+  c_set_bindings pairs (fromIntegral (length bindings))
+
+-- | Start the selected backend.
 heartInit :: IO Bool
 heartInit = (== 0) <$> c_init
 

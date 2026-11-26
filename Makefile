@@ -22,7 +22,7 @@ PROTOCOL_HEADERS = \
 
 ICON_SIZES = 16 32 48 64 128 192 256 512
 
-SOURCES = whiplash.cabal app/Main.hs heart/heart.c heart/heart.h \
+SOURCES = whiplash.cabal app/Main.hs heart/heart.c heart/heart.h heart/x11.c heart/x11.h \
 	src/Whiplash.hs $(wildcard src/Whiplash/*.hs)
 
 .PHONY: build run install uninstall clean

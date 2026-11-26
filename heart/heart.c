@@ -70,6 +70,7 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include "heart.h"
+#include "x11.h"
 
 /* Scene stacking order, bottom to top. Tiled windows live between the
  * layer-shell "bottom" and "top" layers, so bars draw above them. */
@@ -367,6 +368,17 @@ static wh_view_rect_cb cb_view_grab;
 static wh_view_rect_cb cb_view_moved;
 static wh_workspace_cb cb_workspace_activate;
 static wh_void_cb cb_config_changed;
+static enum wh_backend backend = WH_BACKEND_WAYLAND;
+
+void wh_set_backend(int selected) {
+	backend = selected;
+}
+
+void wh_set_bindings(const uint32_t *pairs, unsigned count) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_set_bindings(pairs, count);
+	}
+}
 
 void wh_on_view_mapped(wh_view_cb cb) { cb_view_mapped = cb; }
 void wh_on_view_unmapped(wh_view_cb cb) { cb_view_unmapped = cb; }
@@ -1146,12 +1158,18 @@ static int sorted_outputs(struct wh_output **out, int max) {
 }
 
 int wh_output_count(void) {
+	if (backend == WH_BACKEND_X11) {
+		return 1;
+	}
 	struct wh_output *outs[16];
 	return sorted_outputs(outs, 16);
 }
 
 /* Fills full x,y,w,h then usable x,y,w,h for screen i; 0 on success. */
 int wh_output_info(int i, int *out) {
+	if (backend == WH_BACKEND_X11) {
+		return wh_x11_output_info(i, out);
+	}
 	struct wh_output *outs[16];
 	int n = sorted_outputs(outs, 16);
 	if (i < 0 || i >= n) {
@@ -1164,6 +1182,9 @@ int wh_output_info(int i, int *out) {
 }
 
 const char *wh_output_name(int i) {
+	if (backend == WH_BACKEND_X11) {
+		return i == 0 ? "X11" : NULL;
+	}
 	struct wh_output *outs[16];
 	int n = sorted_outputs(outs, 16);
 	return i >= 0 && i < n ? outs[i]->wlr_output->name : NULL;
@@ -1693,6 +1714,9 @@ void wh_workspace_add(int tag, const char *name) {
 }
 
 void wh_workspace_set_active(int tag) {
+	if (backend == WH_BACKEND_X11) {
+		return;
+	}
 	struct wh_workspace *ws;
 	wl_list_for_each(ws, &server.workspaces, link) {
 		wlr_ext_workspace_handle_v1_set_active(ws->handle, ws->tag == tag);
@@ -1700,6 +1724,9 @@ void wh_workspace_set_active(int tag) {
 }
 
 void wh_workspace_set_urgent(int tag, int on) {
+	if (backend == WH_BACKEND_X11) {
+		return;
+	}
 	struct wh_workspace *ws;
 	wl_list_for_each(ws, &server.workspaces, link) {
 		if (ws->tag == tag) {
@@ -2239,6 +2266,10 @@ static void view_place(struct wh_view *view, int x, int y, int width, int height
 }
 
 void wh_view_set_geometry(wh_view_id id, int x, int y, int width, int height) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_set_geometry(id, x, y, width, height);
+		return;
+	}
 	struct wh_view *view = view_by_id(id);
 	if (view && view != server.grab_view) {
 		view_place(view, x, y, width, height);
@@ -2246,6 +2277,10 @@ void wh_view_set_geometry(wh_view_id id, int x, int y, int width, int height) {
 }
 
 void wh_view_set_mode(wh_view_id id, int mode) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_set_mode(id, mode);
+		return;
+	}
 	struct wh_view *view = view_by_id(id);
 	if (!view || (int)view->mode == mode) {
 		return;
@@ -2270,6 +2305,9 @@ void wh_view_set_mode(wh_view_id id, int mode) {
 }
 
 const char *wh_view_app_id(wh_view_id id) {
+	if (backend == WH_BACKEND_X11) {
+		return wh_x11_app_id(id);
+	}
 	struct wh_view *view = view_by_id(id);
 	const char *app_id = NULL;
 	if (view && view->xsurface) {
@@ -2281,6 +2319,9 @@ const char *wh_view_app_id(wh_view_id id) {
 }
 
 int wh_view_wants_float(wh_view_id id) {
+	if (backend == WH_BACKEND_X11) {
+		return 0;
+	}
 	struct wh_view *view = view_by_id(id);
 	if (!view) {
 		return 0;
@@ -2308,12 +2349,18 @@ int wh_view_wants_float(wh_view_id id) {
 }
 
 int wh_view_natural_width(wh_view_id id) {
+	if (backend == WH_BACKEND_X11) {
+		return wh_x11_natural_width(id);
+	}
 	struct wh_view *view = view_by_id(id);
 	return !view ? 0 : view->xsurface ? view->xsurface->width
 		: view->xdg_toplevel->base->geometry.width;
 }
 
 int wh_view_natural_height(wh_view_id id) {
+	if (backend == WH_BACKEND_X11) {
+		return wh_x11_natural_height(id);
+	}
 	struct wh_view *view = view_by_id(id);
 	return !view ? 0 : view->xsurface ? view->xsurface->height
 		: view->xdg_toplevel->base->geometry.height;
@@ -2324,6 +2371,10 @@ void wh_set_mouse_mod(uint32_t mods) {
 }
 
 void wh_view_set_visible(wh_view_id id, int visible) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_set_visible(id, visible);
+		return;
+	}
 	struct wh_view *view = view_by_id(id);
 	if (view) {
 		wlr_scene_node_set_enabled(&view->container->node, visible != 0);
@@ -2331,6 +2382,10 @@ void wh_view_set_visible(wh_view_id id, int visible) {
 }
 
 void wh_view_focus(wh_view_id id) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_focus(id);
+		return;
+	}
 	struct wlr_seat *seat = server.seat;
 	struct wlr_surface *prev = seat->keyboard_state.focused_surface;
 	struct wh_view *view = id ? view_by_id(id) : NULL;
@@ -2376,6 +2431,10 @@ void wh_view_focus(wh_view_id id) {
 }
 
 void wh_view_close(wh_view_id id) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_close(id);
+		return;
+	}
 	struct wh_view *view = view_by_id(id);
 	if (view && view->xsurface) {
 		wlr_xwayland_surface_close(view->xsurface);
@@ -2385,6 +2444,10 @@ void wh_view_close(wh_view_id id) {
 }
 
 void wh_set_border(int width, uint32_t focused_rgba, uint32_t normal_rgba) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_set_border(width, focused_rgba, normal_rgba);
+		return;
+	}
 	server.border_width = width < 0 ? 0 : width;
 	rgba_to_floats(focused_rgba, server.border_focused);
 	rgba_to_floats(normal_rgba, server.border_normal);
@@ -2461,7 +2524,37 @@ static int handle_stop_signal(int signal, void *data) {
 	return 0;
 }
 
+static void watch_stop_signals(void) {
+	struct wl_event_loop *loop = wl_display_get_event_loop(server.wl_display);
+	wl_event_loop_add_signal(loop, SIGTERM, handle_stop_signal, NULL);
+	wl_event_loop_add_signal(loop, SIGINT, handle_stop_signal, NULL);
+}
+
+static int start_x11(void) {
+	/* Reuse the event loop for XCB, signals and inotify. It has no socket. */
+	server.wl_display = wl_display_create();
+	if (!server.wl_display) {
+		return 1;
+	}
+	struct wh_x11_callbacks callbacks = {
+		.mapped = cb_view_mapped,
+		.unmapped = cb_view_unmapped,
+		.key = cb_key,
+		.outputs_changed = cb_outputs_changed,
+	};
+	int status = wh_x11_init(server.wl_display, callbacks);
+	if (status != 0) {
+		wl_display_destroy(server.wl_display);
+		return status;
+	}
+	watch_stop_signals();
+	return 0;
+}
+
 int wh_init(void) {
+	if (backend == WH_BACKEND_X11) {
+		return start_x11();
+	}
 	wlr_log_init(WLR_INFO, NULL);
 	wl_list_init(&server.views);
 	wl_list_init(&server.outputs);
@@ -2667,9 +2760,7 @@ int wh_init(void) {
 	setenv("WAYLAND_DISPLAY", server.socket, true);
 	/* SIGTERM (the greeter ending the session) and SIGINT stop the loop, so
 	 * the shutdown path runs and cleans up after itself. */
-	struct wl_event_loop *loop = wl_display_get_event_loop(server.wl_display);
-	wl_event_loop_add_signal(loop, SIGTERM, handle_stop_signal, NULL);
-	wl_event_loop_add_signal(loop, SIGINT, handle_stop_signal, NULL);
+	watch_stop_signals();
 	if (!wlr_backend_start(server.backend)) {
 		wlr_backend_destroy(server.backend);
 		wl_display_destroy(server.wl_display);
@@ -2691,7 +2782,20 @@ void wh_quit(void) {
 	wl_display_terminate(server.wl_display);
 }
 
+static void destroy_display(void) {
+	wl_display_destroy(server.wl_display);
+	if (server.config_watch_source) {
+		close(server.config_watch_fd);
+	}
+	free(server.config_name);
+}
+
 void wh_shutdown(void) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_shutdown();
+		destroy_display();
+		return;
+	}
 	if (server.xwayland) {
 		wl_list_remove(&server.xwayland_ready.link);
 		wl_list_remove(&server.xwayland_new_surface.link);
@@ -2746,11 +2850,7 @@ void wh_shutdown(void) {
 	wlr_allocator_destroy(server.allocator);
 	wlr_renderer_destroy(server.renderer);
 	wlr_backend_destroy(server.backend);
-	wl_display_destroy(server.wl_display);
-	if (server.config_watch_source) {
-		close(server.config_watch_fd);
-	}
-	free(server.config_name);
+	destroy_display();
 	free(server.xkb_layout);
 	free(server.xkb_variant);
 	free(server.xkb_options);

@@ -14,7 +14,7 @@ import Data.IORef
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable, removeFile)
-import System.Environment (getArgs, lookupEnv)
+import System.Environment (getArgs, lookupEnv, setEnv, unsetEnv)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
 
@@ -56,17 +56,18 @@ complain msg = do
     shellQuote s = "'" ++ concatMap (\c -> if c == '\'' then "'\\''" else [c]) s ++ "'"
 
 -- | Push the parts of a config the heart owns.
-applyToHeart :: Config -> IO ()
-applyToHeart cfg = do
+applyToHeart :: H.Backend -> Config -> IO ()
+applyToHeart backend cfg = do
   H.setBorder (borderWidth cfg) (focusedBorderColor cfg) (normalBorderColor cfg)
-  H.setMouseMod (modMask cfg)
-  H.setOutputRules (outputRules cfg)
-  let kb = keyboard cfg
-  H.setKeyboard (kbLayout kb) (kbVariant kb) (kbOptions kb) (kbRepeatRate kb) (kbRepeatDelay kb)
-  let tp = touchpad cfg
-  H.setTouchpad (tpTap tp) (tpTapDrag tp) (tpDragLock tp) (tpNaturalScroll tp)
-    (tpDisableWhileTyping tp) (tpAccelSpeed tp)
-    (fromEnum (tpAccelProfile tp)) (fromEnum (tpClickMethod tp))
+  when (backend == H.Wayland) $ do
+    H.setMouseMod (modMask cfg)
+    H.setOutputRules (outputRules cfg)
+    let kb = keyboard cfg
+    H.setKeyboard (kbLayout kb) (kbVariant kb) (kbOptions kb) (kbRepeatRate kb) (kbRepeatDelay kb)
+    let tp = touchpad cfg
+    H.setTouchpad (tpTap tp) (tpTapDrag tp) (tpDragLock tp) (tpNaturalScroll tp)
+      (tpDisableWhileTyping tp) (tpAccelSpeed tp)
+      (fromEnum (tpAccelProfile tp)) (fromEnum (tpClickMethod tp))
 
 -- | A new window that is not a scratchpad: window rules, the dialog
 -- guess, then into the stack.
@@ -92,19 +93,45 @@ guarded what act fallback = handle report act
       hPutStrLn stderr ("whiplash: " ++ what ++ ": " ++ show (e :: SomeException))
       pure fallback
 
+data Options = Options H.Backend Bool (Maybe String)
+
+parseArgs :: [String] -> Either String Options
+parseArgs = go (Options H.Wayland False Nothing)
+  where
+    go opts [] = Right opts
+    go (Options _ skip cmd) ("--backend" : name : rest) = case name of
+      "wayland" -> go (Options H.Wayland skip cmd) rest
+      "x11" -> go (Options H.X11 skip cmd) rest
+      _ -> Left ("unknown backend " ++ show name)
+    go (Options backend _ cmd) ("-n" : rest) = go (Options backend True cmd) rest
+    go (Options backend skip _) ("-s" : command : rest) =
+      go (Options backend skip (Just command)) rest
+    go _ (arg : _) = Left ("unexpected argument " ++ show arg)
+
 whiplash :: Config -> IO ()
 whiplash defaults = do
   args <- getArgs
-  -- -s CMD runs CMD after startup; -n skips the autostart (handy for
-  -- nested or headless test runs that must not start session services).
-  let startupCmd = case dropWhile (/= "-s") args of
-        (_ : cmd : _) -> Just cmd
-        _ -> Nothing
-      skipHook = "-n" `elem` args
+  case parseArgs args of
+    Left err -> do
+      hPutStrLn stderr ("whiplash: " ++ err)
+      hPutStrLn stderr "Usage: whiplash [--backend wayland|x11] [-n] [-s CMD]"
+      exitFailure
+    Right opts -> runSession opts defaults
+
+runSession :: Options -> Config -> IO ()
+runSession (Options backend skipHook startupCmd) compiled = do
   -- Started inside another graphical session (a nested test run)?
   nested <- or <$> mapM (fmap (maybe False (not . null)) . lookupEnv) ["WAYLAND_DISPLAY", "DISPLAY"]
+  H.setBackend backend
+  when (backend == H.X11) $ do
+    unsetEnv "WAYLAND_DISPLAY"
+    unsetEnv "WAYLAND_SOCKET"
+    setEnv "XDG_SESSION_TYPE" "x11"
   (dir, name) <- configPath
   let path = dir ++ "/" ++ name
+      -- The compiled-in hook starts the Wayland shell and its services.
+      defaults = if backend == H.Wayland then compiled else compiled {startupHook = pure ()}
+      installBindings bindings = when (backend == H.X11) (H.setBindings (M.keys bindings))
 
   cfg0 <- readConfig defaults path >>= either (\e -> complain e >> pure defaults) pure
   cfgRef <- newIORef cfg0
@@ -127,11 +154,13 @@ whiplash defaults = do
           Right new -> do
             -- Workspaces are announced to bars once; keep the running set.
             let cfg = new {workspaceTags = workspaceTags old}
+                bindings = keyMapOf cfg
             io $ do
               writeIORef cfgRef cfg
-              writeIORef keyRef (keyMapOf cfg)
-              applyToHeart cfg
-              H.applyOutputRules
+              writeIORef keyRef bindings
+              installBindings bindings
+              applyToHeart backend cfg
+              when (backend == H.Wayland) H.applyOutputRules
               hPutStrLn stderr ("whiplash: reloaded " ++ path)
             refresh
       env = XEnv cfgRef keyRef stRef reloadNow
@@ -176,9 +205,10 @@ whiplash defaults = do
         pure True) False
   H.onConfigChanged (run "reload" reloadNow)
 
-  applyToHeart cfg0
+  applyToHeart backend cfg0
   ok <- H.heartInit
   unless ok $ hPutStrLn stderr "whiplash: the heart failed to start" >> exitFailure
+  readIORef keyRef >>= installBindings
   createDirectoryIfMissing True dir
   watching <- H.watchConfig dir name
   unless watching $ hPutStrLn stderr ("whiplash: cannot watch " ++ dir ++ "; no hot reload")
@@ -186,7 +216,7 @@ whiplash defaults = do
   -- see the environment the bus was started with, from before whiplash
   -- set WAYLAND_DISPLAY/DISPLAY. Never from a nested run: it would point
   -- the host session's portals at the nested display.
-  unless nested $
+  when (backend == H.Wayland && not nested) $
     H.spawnCommand "dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP"
   forM_ (workspaceTags cfg0) $ \t -> H.addWorkspace t (show t)
   run "workspaces" refresh

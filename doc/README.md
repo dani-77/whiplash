@@ -18,6 +18,7 @@ window-management decisions live in Haskell, much like somewm pairs C with Lua.
 ```
 heart/heart.c   C, derived from tinywl (CC0). Owns everything wlroots:
                 outputs, input, scene graph, protocols. Makes NO decisions.
+heart/x11.c     Native X11 backend using XCB. Applies layout, visibility and focus.
 heart/heart.h   The whole C <-> Haskell contract. Read this first.
 src/Whiplash/
   Heart.hs      FFI bindings to heart.h, nothing else.
@@ -74,11 +75,18 @@ xcb-icccm through `pkgconfig-depends` in `whiplash.cabal`.
 `build/whiplash` only rebuilds when a source file is newer than it, so `make && sudo
 make install` never runs cabal as root.
 
-Command-line flags, mostly for testing:
+Command-line flags
 
-- `-s CMD` runs `CMD` once whiplash is up;
+- `--backend wayland` starts the wlroots compositor and is the default.
+- `--backend x11` manages the X server selected by `DISPLAY` using XCB.
+- `-s CMD` runs `CMD` once whiplash is up.
 - `-n` skips the config's `autostart` (nested and headless runs shouldn't start session
   services).
+
+The native X11 backend is a proof of concept for normal windows on one X screen.
+It shares the TOML config and reload with Wayland. The X server supplies the keymap.
+An explicit TOML `autostart` works on both backends. The compiled-in Utumno autostart
+belongs to Wayland.
 
 ## Testing without touching your session
 
@@ -103,6 +111,23 @@ WAYLAND_DISPLAY=wayland-N grim -s 0.5 shot.png       # capture
   text typed into XWayland apps. That's wtype, not whiplash.
 - When killing a headless instance, check `/proc/PID/environ` for
   `WLR_BACKENDS=headless` so you don't kill your real session.
+
+### X11 proof of concept
+
+The same executable was exercised in a dedicated Xephyr display with two xterms and
+as a nested Wayland compositor on Xvfb with two native Alacritty windows. Both runs
+used `-n` and the same TOML with two workspaces and only `Tall` enabled.
+
+- On both backends, tested tiling, focus, swapping with the master, switching to an
+  empty workspace and back, closing the focused window and reloading a key binding.
+- On X11, also tested `-s`, rejection when another WM owns the display, and
+  withdrawal and remapping of a client. XTEST drove the bindings. X11 geometry,
+  visibility and input focus were queried directly.
+- On Wayland, tested the default invocation and startup with `--backend wayland`.
+  The default run used wtype for the bindings and grim to check geometry, visibility
+  and focus borders. XWayland was unavailable in the test environment.
+
+Physical Xorg login, ATG and the ISO are pending.
 
 ## Protocols and features
 

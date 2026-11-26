@@ -1,13 +1,12 @@
 /*
  * whiplash heart: the C side of whiplash.
  *
- * The heart owns everything wlroots: outputs, input devices, the scene graph
- * and the xdg-shell protocol. It makes no window-management decisions. It
- * reports events to the brain (Haskell) through callbacks and carries out the
- * brain's commands through the wh_* functions below.
+ * The heart owns the platform integration for Wayland (wlroots) and native
+ * X11 (XCB). It reports events to the brain (Haskell) through callbacks and
+ * carries out the brain's commands through the wh_* functions below.
  *
- * Views are identified by small integers, never by pointers, so the brain
- * never touches a wlroots struct.
+ * Views are identified by integers so Haskell can use the same interface
+ * for both backends.
  */
 #ifndef WHIPLASH_HEART_H
 #define WHIPLASH_HEART_H
@@ -65,6 +64,12 @@ void wh_on_workspace_activate(wh_workspace_cb cb);
 /* The watched config file was written (see wh_watch_config). */
 void wh_on_config_changed(wh_void_cb cb);
 
+enum wh_backend { WH_BACKEND_WAYLAND, WH_BACKEND_X11 };
+
+/* Select before configuring or starting the heart. */
+void wh_set_backend(int backend);
+/* Consecutive modifier/keysym pairs for backends that grab keys in advance. */
+void wh_set_bindings(const uint32_t *pairs, unsigned count);
 /* Lifecycle. wh_init returns 0 on success. */
 int wh_init(void);
 const char *wh_socket(void);

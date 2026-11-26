@@ -2,24 +2,15 @@
 
 <h1 align="center">whiplash</h1>
 
-<p align="center">A tiling Wayland compositor for Linux, in the spirit of <a href="https://xmonad.org/">xmonad</a> —
-with a Haskell brain, and one config file that reloads the moment you save it.</p>
+<p align="center">An xmonad-style tiling window manager for Xorg and compositor for Wayland,
+with a Haskell core and one TOML config that reloads when you save it.</p>
 
 ---
 
-whiplash is a window manager/compositor for Wayland. If you've used **xmonad**, it will
-feel like home: a master window and a stack beside it, workspaces that swap between
-screens, new windows opening right where you're working. The difference is the config:
-instead of a Haskell file you recompile, whiplash reads a plain **TOML** file, and every
-time you save it the change is live — no rebuild, no restart, no logout.
-
-Under the hood it's two pieces: a small core written in C that talks to the screen,
-keyboard and mouse (built on [wlroots]), and the window-management logic written in
-Haskell, the same language xmonad uses. You don't need to know either to use it.
-
-whiplash doesn't come with a bar, launcher or wallpaper app. It works with the ones you
-already have — any bar or shell made for Wayland compositors like sway or Hyprland
-(waybar, eww, Quickshell shells such as [Utumno], ...) runs on whiplash too.
+Whiplash uses the same Haskell layouts, window-management actions and workspaces
+on both backends. The Wayland compositor uses [wlroots] and starts by default.
+The native X11 backend uses XCB to manage windows in an existing Xorg session.
+The D77 shells for the two sessions are [Utumno] on Wayland and [ATG] on Xorg.
 
 The name comes from Metallica's *Whiplash*.
 
@@ -27,24 +18,29 @@ The name comes from Metallica's *Whiplash*.
 
 - **Three layouts**, switchable per workspace: `tall` (master on the left, the rest
   stacked on the right), `wide` (master on top), and `full` (one window at a time).
-- **One config file** (`~/.config/whiplash/config.toml`) — keybindings, colors, gaps,
-  keyboard layout, touchpad, monitors, autostart apps. Save it and it's live. A typo
-  never breaks your session: whiplash keeps the last working config and shows you what's
-  wrong in a notification.
-- **xmonad-style workspaces and monitors** — up to 9 workspaces shared by all your
-  screens; asking for a workspace that's showing on another screen swaps the two.
+- **One config file** (`~/.config/whiplash/config.toml`) for keybindings, colors,
+  gaps and autostart. Save it to reload settings and bindings. Whiplash keeps the last
+  working config if a save contains an error.
+- **Up to 9 workspaces** with keyboard and bar controls.
 - **Window rules** — send an app to its own workspace every time it opens, or make it
   float (or never float), by its name.
-- **Focus follows the mouse**, if you want it — point at a window to type into it,
-  no click needed. Off by default; turn it on with `focus_follows_mouse = true`.
+- **Click to focus** on both backends. Set `focus_follows_mouse = true` to focus
+  windows as the pointer enters them.
 - **Scratchpads** — a drop-down terminal (or any app) that one key shows and hides,
   without closing it, wherever you are.
+- **Fullscreen** for the focused window from a shortcut.
+- Works as a real login-screen session (greetd, SDDM, GDM, ...) or on a nested
+  display for trying it out.
+
+### Wayland features
+
+- **Multiple monitors** — asking for a workspace that's showing on another screen
+  swaps the two.
 - **Touchpad gestures** — swipe with three fingers to change workspace, or bind any
   swipe to anything a key can do. Pinch zoom and other gestures still reach your apps.
 - **Floating windows** — dialogs float on their own; hold the modifier and drag any
   window with the left button to move it, or with the right button to resize it.
-- **Fullscreen** for videos, games and presentations, on request from the app or with a
-  key.
+- **Fullscreen requests from applications** for videos, games and presentations.
 - **Touchpad that just works** — tap to click, tap and drag, and no stray clicks while
   you type, all on by default and adjustable in the config.
 - **Workspaces in your bar** — bars that support Wayland's standard workspace protocol
@@ -59,13 +55,15 @@ The name comes from Metallica's *Whiplash*.
 - **Monitors and night light** — set up screens on the fly with wlr-randr, kanshi or
   wdisplays, and warm the colors at night with wlsunset or gammastep.
 - **Runs your existing Linux apps**, X11 ones included, through XWayland.
-- Works as a real login-screen session (greetd, SDDM, GDM, ...) or nested inside your
-  current desktop for trying it out first.
+
+The X11 backend currently manages one X screen. ATG can switch workspaces and show
+the active workspace. Per-monitor work areas, automatic dialog floating and mouse
+dragging are still pending on X11.
 
 ## Installing
 
-There are no prebuilt packages yet — whiplash is built from source. You'll need the
-Haskell compiler (GHC) and cabal, plus a handful of development packages:
+To build this branch, install GHC and Cabal along with the development packages
+for both backends.
 
 <details>
 <summary><b>Void Linux</b></summary>
@@ -94,22 +92,49 @@ download anything.
 Then clone and install:
 
 ```sh
-git clone https://github.com/dani-77/whiplash.git
+git clone --branch x11 https://github.com/dani-77/whiplash.git
 cd whiplash
 make
 sudo make install
 ```
 
-This builds whiplash and installs it along with a session entry, so your login screen
-(greetd, SDDM, GDM, ...) offers **whiplash** next to whatever else you have installed.
-It also drops in a small file that tells your system which app handles screen sharing
-and file-open dialogs while running whiplash — nothing for you to touch. Log out, pick
-whiplash from the session list, log back in.
+### Choosing a login session
 
-To try it first without logging out — nested inside your current desktop, in a window:
+| Login entry | Session file installed under `/usr/share` | Backend |
+| --- | --- | --- |
+| **Whiplash** | `wayland-sessions/whiplash.desktop` | Wayland |
+| **Whiplash · X11** | `xsessions/whiplash-x11.desktop` | Xorg |
+
+Both entries call the [session script](data/whiplash-session), installed as
+`/usr/bin/whiplash-session`. The X11 entry passes `--backend x11`. When the
+system ATG configuration and `qs` are available, the script starts ATG via
+`-s 'QT_QPA_PLATFORM=xcb qs -n -d -c atg'` and reserves 48 pixels at the top.
+Edit the session script to change this automatic launch. Set
+`WHIPLASH_X11_RESERVE_TOP` in the session environment to choose a different
+reservation. The launch command lives in the script and the rest of your
+autostart list lives in `config.toml`.
+
+Utumno on Wayland is started by the built-in autostart or your TOML autostart.
+If you launch the X11 binary directly, you can still select your own startup
+command with `-s`.
+
+To try Wayland inside your current desktop:
 
 ```sh
 make run
+```
+
+For X11, start Xephyr on a free display. This example uses `:99`.
+
+```sh
+Xephyr :99 -screen 1280x720 -nolisten tcp
+```
+
+Once the Xephyr window appears, run Whiplash in another terminal with `-n` to
+skip the TOML autostart.
+
+```sh
+DISPLAY=:99 ./build/whiplash --backend x11 -n -s xterm
 ```
 
 To uninstall later: `sudo make uninstall`.
@@ -125,10 +150,9 @@ mkdir -p ~/.config/whiplash
 cp /usr/share/whiplash/config.toml ~/.config/whiplash/config.toml
 ```
 
-The example is the author's own setup: it starts the [Utumno] shell, a wallpaper daemon,
-notifications and so on, and the `Super` keys open Utumno's launcher, lock screen and
-menus. Swap the `autostart` list and those keys for the programs you use, and change
-`terminal` if you don't have alacritty.
+The [example config](examples/config.toml) includes an X11 profile with ATG
+shortcuts and `scrot` for screenshots. The Wayland defaults use Utumno and
+`grim`. Set `terminal` to the terminal you use.
 
 ### Default keybindings
 
@@ -138,7 +162,7 @@ just a line in `config.toml`, so rebind anything to anything.
 | Keys | Action |
 | --- | --- |
 | `Mod` + `Shift` + `Return` | Open a terminal |
-| `Mod` + `P` | Open the run menu (wmenu) |
+| `Mod` + `P` | Open the run menu (wmenu on Wayland, dmenu on X11) |
 | `Mod` + `J` / `K` | Move focus to the next / previous window |
 | `Mod` + `Shift` + `J` / `K` | Swap the focused window with the next / previous one |
 | `Mod` + `Return` | Swap the focused window with the master |
@@ -150,19 +174,19 @@ just a line in `config.toml`, so rebind anything to anything.
 | `Mod` + `1`-`9` | Switch to workspace 1-9 |
 | `Mod` + `Shift` + `1`-`9` | Move the focused window to workspace 1-9 |
 | `Mod` + `Tab` | Back to the previous workspace |
-| `Mod` + `,` / `.` | Focus the previous / next monitor |
-| `Mod` + `Shift` + `,` / `.` | Move the focused window to the previous / next monitor |
-| `Mod` + left drag | Move a window (it starts floating) |
-| `Mod` + right drag | Resize a window |
+| `Mod` + `,` / `.` | Focus the previous / next monitor (Wayland, example config) |
+| `Mod` + `Shift` + `,` / `.` | Move the focused window to the previous / next monitor (Wayland, example config) |
+| `Mod` + left drag | Move a window (Wayland) |
+| `Mod` + right drag | Resize a window (Wayland) |
 | `Mod` + `Shift` + `C` | Close the focused window |
-| `Mod` + `Shift` + `R` | Reload the config (saving the file already does this) |
+| `Mod` + `Shift` + `R` | Reload the config (example config) |
 | `Mod` + `Shift` + `Q` | Quit whiplash (ends the session) |
 | `Ctrl` + `Alt` + `F1`-`F12` | Switch to another virtual terminal |
 
 ## Configuring
 
-Everything lives in `~/.config/whiplash/config.toml`. Anything you leave out keeps its
-default. A few of the things you can set:
+Your Whiplash settings live in `~/.config/whiplash/config.toml`. Anything you leave
+out keeps its default. This example uses Wayland apps and input settings.
 
 ```toml
 terminal = "foot"
@@ -214,12 +238,15 @@ app_id = "scratch-term"
 "Super+l" = "spawn swaylock"
 ```
 
-If `[keybinds]` is in the file, it replaces the whole default set, so the file always
-lists every binding that's active. The example config lists every action a key can be
-bound to.
+The top-level `[keybinds]` table replaces the compiled bindings. Add
+`[x11.keybinds]` or `[wayland.keybinds]` to override individual bindings in one
+session. Set a binding in one of those tables to `false` to remove it for that
+backend. An `autostart` list under `[x11]` or `[wayland]` replaces the shared
+list at the next login.
 
-Something not working? whiplash keeps its log in `~/.local/state/whiplash/whiplash.log`
-(and the previous session's in `whiplash.log.old`).
+The login script keeps its log in
+`${XDG_STATE_HOME:-$HOME/.local/state}/whiplash/whiplash.log`. The previous
+session's log is `whiplash.log.old` in the same directory.
 
 ## License
 
@@ -230,3 +257,4 @@ Looking to build or change whiplash itself, rather than just use it? See
 
 [wlroots]: https://gitlab.freedesktop.org/wlroots/wlroots
 [Utumno]: https://github.com/dani-77/utumno
+[ATG]: https://github.com/d77void/ATG

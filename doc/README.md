@@ -3,22 +3,20 @@
 # whiplash (developer notes)
 
 This is the technical README: architecture, the C/Haskell boundary, how to build and
-test, protocol coverage, and why things are the way they are. If you just want to *use*
-whiplash as your Wayland session, see the [root README](../README.md).
+test, protocol coverage, and why things are the way they are. For installation,
+session selection and user configuration, see the [root README](../README.md).
 
-whiplash is an xmonad-style Wayland compositor with a **C heart** on wlroots 0.20 and a
-**Haskell brain**. Haskell had no living Wayland compositor: waymonad and hsroots
-stopped in 2019, and wlhs (Haskell wlroots bindings) is incomplete and stuck on
-wlroots 0.17. Binding all of wlroots to Haskell is where those projects stalled, so
-whiplash doesn't try: the wlroots plumbing stays in a small C layer, and the
-window-management decisions live in Haskell, much like somewm pairs C with Lua.
+The **C heart** integrates wlroots 0.20 on Wayland and XCB on native X11.
+The **Haskell core** owns layout, focus, workspaces, rules and user actions.
+The original design kept wlroots calls in C to give Haskell a small interface for
+window-management decisions. Native X11 uses the same interface.
 
 ## Layout of the source
 
 ```
-heart/heart.c   C, derived from tinywl (CC0). Owns everything wlroots:
-                outputs, input, scene graph, protocols. Makes NO decisions.
+heart/heart.c   Shared C entry points and wlroots support derived from tinywl (CC0).
 heart/x11.c     Native X11 backend using XCB. Applies layout, visibility and focus.
+heart/x11.h     Interface between the shared C entry points and the XCB backend.
 heart/heart.h   The whole C <-> Haskell contract. Read this first.
 src/Whiplash/
   Heart.hs      FFI bindings to heart.h, nothing else.
@@ -83,16 +81,63 @@ Command-line flags
 - `-n` skips the config's `autostart` (nested and headless runs shouldn't start session
   services).
 
-The native X11 backend is a proof of concept for normal windows on one X screen.
-It shares the TOML config and reload with Wayland. The X server supplies the keymap.
-An explicit TOML `autostart` works on both backends. The compiled-in Utumno autostart
-belongs to Wayland.
+## Session startup
 
-The X11 login entry starts the system installation of ATG if present. It reserves
-48 pixels for the bar because ATG uses an override-redirect window. Set
-`WHIPLASH_X11_RESERVE_TOP` to override the reservation. ATG reads the workspace
-number, names and selection via EWMH. Its clicks request a workspace change
-through the same workspace action used by the keyboard bindings.
+- [`data/whiplash.desktop`](../data/whiplash.desktop) installs in
+  `/usr/share/wayland-sessions` and calls `whiplash-session`. The default backend
+  is Wayland.
+- [`data/whiplash-x11.desktop`](../data/whiplash-x11.desktop) installs in
+  `/usr/share/xsessions` and calls `whiplash-session --backend x11`.
+- [`data/whiplash-session`](../data/whiplash-session) runs the binary under
+  `dbus-run-session`, exports `XDG_CURRENT_DESKTOP=whiplash` and rotates the
+  current and previous session logs under
+  `${XDG_STATE_HOME:-$HOME/.local/state}/whiplash`.
+
+The wrapper enables automatic ATG startup when invoked with exactly
+`--backend x11`, `/usr/share/quickshell/atg/shell.qml` is readable, and `qs`
+is available. It prepends `/usr/share` to `XDG_CONFIG_DIRS` so Quickshell can
+resolve the installed config, defaults `WHIPLASH_X11_RESERVE_TOP` to 48, and appends
+`-s 'QT_QPA_PLATFORM=xcb qs -n -d -c atg'`. The wrapper is the place to edit
+the ATG startup command. The example X11 profile lists the other services.
+
+[`Run.hs`](../src/Whiplash/Run.hs) selects the backend before loading the config.
+On X11 it clears inherited `WAYLAND_DISPLAY` and `WAYLAND_SOCKET` and sets
+`XDG_SESSION_TYPE=x11`. After backend initialization it installs bindings, registers
+workspaces, applies the initial layout, runs the selected TOML autostart and finally
+spawns the `-s` command. `-n` skips the TOML autostart and an explicit `-s`
+still runs. Passing extra arguments to the wrapper bypasses its automatic ATG launch.
+The Wayland defaults in [`app/Main.hs`](../app/Main.hs) start Utumno from the
+autostart hook.
+
+## Native X11 backend
+
+[`heart/x11.c`](../heart/x11.c) claims `SubstructureRedirect` on the root of the
+selected `DISPLAY` using a checked request. It reports when another WM owns
+the display. The XCB fd uses the shared event loop alongside inotify and shutdown
+signals. The X server supplies the keymap. The backend grabs the keys registered by
+Haskell and refreshes the grabs on keymap changes and TOML reload.
+
+- **Workspaces and work area.** The C backend maps Haskell workspace tags to
+  zero-based EWMH desktops. It publishes the workspace count, names, current desktop
+  and work areas. A `_NET_CURRENT_DESKTOP` client message becomes the same workspace
+  action that a keybinding invokes. ATG listens for the resulting root-property
+  changes. ATG's override-redirect bar uses the top reservation set in the wrapper.
+  The reservation affects the usable rectangle for tiling and `_NET_WORKAREA`.
+  Fullscreen uses the full rectangle. Both rectangles describe one X screen today.
+- **Visibility.** Hiding a client increments its pending-unmap count before issuing
+  `UnmapWindow`. The corresponding event consumes that count and preserves the
+  client in the `StackSet`. A client withdrawal or destruction invokes the shared
+  unmap callback. Shutdown remaps hidden clients and removes the root properties
+  published by Whiplash.
+- **Click focus.** Unfocused clients have passive grabs for buttons 1–3. A press is
+  routed to the shared click callback. `ReplayPointer` then delivers the original
+  click to the application. Wheel events and clicks on override-redirect surfaces
+  stay with the client.
+- **Hover focus.** `focus_follows_mouse` enables X11 crossing handling at startup
+  and on reload. The backend checks the root child actually under the pointer before
+  calling the shared enter callback. Hover focus skips raising the window.
+  Sampling the pointer after a layout change prevents the resulting crossing
+  events from taking focus while the pointer is stationary.
 
 ## Testing without touching your session
 
@@ -137,9 +182,17 @@ The initial native Xorg session was also tested through greetd. The ATG integrat
 was tested on an isolated X server with `wmctrl -d`, `wmctrl -s`, direct clicks
 on the bar and keyboard workspace changes. The panel highlight tracked the
 active workspace, and normal windows were tiled below the 48-pixel reservation.
-The Wayland tests above were repeated after adding ATG. The ISO is pending.
+Xephyr tests checked first-click delivery to application controls, hover without
+raising, hover changes on reload and focus with a stationary pointer during a
+layout change. The Wayland tests above were repeated after the X11 focus changes.
 
-## Protocols and features
+On the test X11 display, use `wmctrl -d` to list desktops and
+`wmctrl -s 1` to select the second desktop. Use
+`xprop -root _NET_CURRENT_DESKTOP _NET_DESKTOP_NAMES _NET_WORKAREA`
+to see what the WM publishes to ATG. Set `DISPLAY` to the dedicated Xephyr
+display before running those commands.
+
+## Wayland protocols and features
 
 - **Shells:** xdg-shell (with xdg-decoration, negotiated server side, and tiled edges so
   clients drop their own shadows), wlr-layer-shell (bars, launchers, menus; popups
@@ -151,8 +204,8 @@ The Wayland tests above were repeated after adding ATG. The ISO is pending.
 - **Workspaces:** ext-workspace-v1, so bars can show and switch them; the urgent state
   is set for workspaces holding a window that asks for attention, through
   xdg-activation-v1 (Wayland) or the X11 urgency hint. Activation never moves focus
-  (as in wasp); a window stops being urgent once it is focused. X11
-  `_NET_ACTIVE_WINDOW` requests still focus the window, as before.
+  (as in wasp); a window stops being urgent once it is focused. XWayland
+  `_NET_ACTIVE_WINDOW` requests still focus the window.
 - **Session:** ext-session-lock-v1 (if the locker dies, the session stays locked;
   while locked only lock surfaces get input), idle notify, idle inhibit, wlr output
   power management (`wlopm`).
@@ -195,6 +248,11 @@ The file is watched with inotify on its directory (so editors that save by renam
 temporary file are seen too) and reloaded on every write. A file that fails to parse
 never replaces a working config: the error goes to the log and to `notify-send`.
 Autostart still runs once per login. Binding changes take effect on reload.
+[`Settings.hs`](../src/Whiplash/Settings.hs) validates both profiles after
+applying the shared settings, then selects the configured backend's overrides.
+Bindings merge by parsed modifier mask and keysym. `Run.hs` keeps the running
+workspace tags when replacing the config, so changing the workspace count needs
+a session restart.
 
 Touchpad gestures: at `swipe_begin` the heart asks the brain (`wh_on_swipe` with
 `WH_SWIPE_QUERY`) whether any `[gestures]` entry uses that many fingers. If so the
@@ -242,7 +300,7 @@ windows in the StackSet, so it stays hidden until toggled again, and then it is
 re-floated centred on the focused screen and inserted on the current workspace.
 `forget` drops a slot whose window unmaps, so the next toggle runs the command again.
 
-Focus-follows-mouse: the heart reports `view_entered` only when real pointer motion
+On Wayland, the heart reports `view_entered` only when real pointer motion
 lands on a different view than the last one (`hover_view`), so a window moving under
 a still pointer never takes focus, and moving inside the focused window after a
 keyboard focus change doesn't steal focus back. Leaving every view (gaps, bars) resets
@@ -275,9 +333,9 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
   greedyView; Mod+drag on a tiled window floats it where it stands.
 - **Alt as Mod, Super for the desktop shell**: the default config leaves Super for the
   bar/launcher/locker shell, so it never collides with window management.
-- **`dbus-update-activation-environment` runs only in a real session**, never when
-  started inside another graphical session: from a nested run it would retarget the
-  host session's portals.
+- **`dbus-update-activation-environment` runs only when a Wayland session starts
+  without an inherited graphical display.** This keeps a nested compositor from
+  retargeting the host session's portals.
 - **Touchpad settings only touch devices that can tap**, so a mouse keeps libinput's
   defaults.
 
@@ -308,5 +366,6 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
 ## Not done yet
 
 - Animations, rounded corners, blur.
-- An "occupied" hint for bars (ext-workspace has no such state).
-- An AUR PKGBUILD (the xbps template lives in d77void/srcpkgs-d77).
+- Native X11 per-monitor work areas, mouse dragging, automatic dialog floating,
+  client fullscreen requests, and occupied and urgent hints for the ATG bar.
+- D77 ISO integration for the two sessions.

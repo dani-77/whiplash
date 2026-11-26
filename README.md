@@ -115,13 +115,12 @@ sudo make install
 Both entries call the [session script](data/whiplash-session), installed as
 `/usr/bin/whiplash-session`. The X11 entry passes `--backend x11`. When the
 system ATG configuration and `qs` are available, the script starts ATG via
-`-s 'QT_QPA_PLATFORM=xcb qs -n -d -c atg'` and reserves 48 pixels at the top.
-Edit the session script to change this automatic launch. Set
-`WHIPLASH_X11_RESERVE_TOP` in the session environment to choose a different
-minimum top reservation for bars such as ATG that supply no EWMH strut.
+`-s 'QT_QPA_PLATFORM=xcb qs -n -d -c atg'`. Panels can reserve space through
+EWMH. For bars that supply no strut, such as the current ATG bar, set
+`WHIPLASH_X11_RESERVE_TOP` in the session environment to add a manual inset.
 An EWMH top reservation and this value combine by taking the larger one.
-The launch command lives in the script and the rest of your autostart list
-lives in `config.toml`.
+Edit the session script to change the automatic ATG launch. The rest of your
+autostart list lives in `config.toml`.
 
 Utumno on Wayland is started by the built-in autostart or your TOML autostart.
 If you launch the X11 binary directly, you can still select your own startup

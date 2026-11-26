@@ -13,7 +13,6 @@ export XDG_CURRENT_DESKTOP=whiplash
 if [ "$#" -eq 2 ] && [ "$1" = --backend ] && [ "$2" = x11 ] &&
     [ -r /usr/share/quickshell/atg/shell.qml ] && command -v qs >/dev/null 2>&1; then
     export XDG_CONFIG_DIRS="/usr/share:${XDG_CONFIG_DIRS:-/etc/xdg}"
-    export WHIPLASH_X11_RESERVE_TOP="${WHIPLASH_X11_RESERVE_TOP:-48}"
     set -- "$@" -s 'QT_QPA_PLATFORM=xcb qs -n -d -c atg'
 fi
 logdir=${XDG_STATE_HOME:-$HOME/.local/state}/whiplash

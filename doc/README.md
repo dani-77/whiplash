@@ -97,9 +97,9 @@ Command-line flags
 The wrapper enables automatic ATG startup when invoked with exactly
 `--backend x11`, `/usr/share/quickshell/atg/shell.qml` is readable, and `qs`
 is available. It prepends `/usr/share` to `XDG_CONFIG_DIRS` so Quickshell can
-resolve the installed config, defaults `WHIPLASH_X11_RESERVE_TOP` to 48, and appends
-`-s 'QT_QPA_PLATFORM=xcb qs -n -d -c atg'`. The wrapper is the place to edit
-the ATG startup command. The example X11 profile lists the other services.
+resolve the installed config and appends `-s 'QT_QPA_PLATFORM=xcb qs -n -d -c atg'`.
+Edit the wrapper to change the ATG startup command. The example X11 profile
+lists the other services.
 
 [`Run.hs`](../src/Whiplash/Run.hs) selects the backend before loading the config.
 On X11 it clears inherited `WAYLAND_DISPLAY` and `WAYLAND_SOCKET` and sets
@@ -122,13 +122,13 @@ Haskell and refreshes the grabs on keymap changes and TOML reload.
   zero-based EWMH desktops. It publishes the workspace count, names, current desktop
   and work areas. A `_NET_CURRENT_DESKTOP` client message becomes the same workspace
   action that a keybinding invokes. ATG listens for the resulting root-property
-  changes. ATG's override-redirect bar uses the top reservation set in the wrapper.
+  changes.
   Docks stay out of the window set and can reserve any edge through
   `_NET_WM_STRUT_PARTIAL` or its legacy equivalent `_NET_WM_STRUT`. The backend
   uses the largest reservation on each edge and recalculates the rectangle on
-  map, unmap, strut updates and root resizes. The wrapper reservation is a
-  minimum inset at the top. Haskell tiling and `_NET_WORKAREA` share the usable
-  rectangle. Docks stack above regular clients and below fullscreen clients,
+  map, unmap, strut updates and root resizes. An explicitly set
+  `WHIPLASH_X11_RESERVE_TOP` is a minimum inset at the top. Haskell tiling and
+  `_NET_WORKAREA` share the usable rectangle. Docks stack above regular clients and below fullscreen clients,
   which use the full rectangle. Both rectangles describe one X screen today.
 - **Workspace occupancy.** The shared Haskell core counts windows in each
   `StackSet` workspace. On native X11 the backend publishes these counts as

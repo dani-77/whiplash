@@ -34,8 +34,8 @@ src/Whiplash/
 app/Main.hs     Compiled-in defaults; config.toml overrides them.
 examples/       config.toml: the defaults written out, installed to
                 share/whiplash/config.toml.
-data/           whiplash-session (login wrapper), whiplash.desktop,
-                whiplash-portals.conf.
+data/           whiplash-session (login wrapper), X11 and Wayland session
+                entries, whiplash-portals.conf.
 protocols/      wlr-layer-shell and wlr-output-power-management XML.
 ```
 
@@ -127,7 +127,7 @@ used `-n` and the same TOML with two workspaces and only `Tall` enabled.
   The default run used wtype for the bindings and grim to check geometry, visibility
   and focus borders. XWayland was unavailable in the test environment.
 
-Physical Xorg login, ATG and the ISO are pending.
+The native Xorg login was tested through greetd. ATG and the ISO are pending.
 
 ## Protocols and features
 

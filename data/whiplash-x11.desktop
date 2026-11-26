@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Whiplash · X11
+Comment=Xmonad-style window manager for Xorg
+Exec=whiplash-session --backend x11
+TryExec=whiplash-session
+Type=Application
+Icon=whiplash

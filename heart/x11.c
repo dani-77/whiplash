@@ -18,9 +18,10 @@
 struct x11_view {
 	struct x11_view *next;
 	xcb_window_t id;
-	bool mapped, fullscreen;
+	bool mapped, wants_float;
+	enum wh_view_mode mode;
 	unsigned pending_unmaps;
-	uint16_t natural_width, natural_height;
+	int natural_width, natural_height;
 	char *app_id;
 };
 
@@ -33,13 +34,19 @@ struct x11_workspace {
 enum ewmh_atom {
 	NET_SUPPORTED, NET_SUPPORTING_WM_CHECK, NET_NUMBER_OF_DESKTOPS,
 	NET_CURRENT_DESKTOP, NET_DESKTOP_NAMES, NET_DESKTOP_GEOMETRY,
-	NET_DESKTOP_VIEWPORT, NET_WORKAREA, NET_WM_NAME, UTF8_STRING, EWMH_COUNT,
+	NET_DESKTOP_VIEWPORT, NET_WORKAREA, NET_WM_NAME, UTF8_STRING,
+	NET_WM_WINDOW_TYPE, NET_WM_WINDOW_TYPE_DIALOG, NET_WM_WINDOW_TYPE_UTILITY,
+	NET_WM_WINDOW_TYPE_SPLASH, NET_WM_WINDOW_TYPE_TOOLBAR,
+	NET_WM_STATE, NET_WM_STATE_MODAL, EWMH_COUNT,
 };
 
 static const char *const ewmh_names[] = {
 	"_NET_SUPPORTED", "_NET_SUPPORTING_WM_CHECK", "_NET_NUMBER_OF_DESKTOPS",
 	"_NET_CURRENT_DESKTOP", "_NET_DESKTOP_NAMES", "_NET_DESKTOP_GEOMETRY",
 	"_NET_DESKTOP_VIEWPORT", "_NET_WORKAREA", "_NET_WM_NAME", "UTF8_STRING",
+	"_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DIALOG", "_NET_WM_WINDOW_TYPE_UTILITY",
+	"_NET_WM_WINDOW_TYPE_SPLASH", "_NET_WM_WINDOW_TYPE_TOOLBAR",
+	"_NET_WM_STATE", "_NET_WM_STATE_MODAL",
 };
 
 static struct {
@@ -263,6 +270,60 @@ static void ungrab_focus_clicks(xcb_window_t id) {
 	}
 }
 
+static bool has_atom_hint(xcb_get_property_cookie_t cookie, enum ewmh_atom first, enum ewmh_atom last) {
+	xcb_get_property_reply_t *reply = xcb_get_property_reply(x11.connection, cookie, NULL);
+	bool floating = false;
+	if (reply && reply->type == XCB_ATOM_ATOM && reply->format == 32) {
+		const xcb_atom_t *types = xcb_get_property_value(reply);
+		for (uint32_t i = 0; i < reply->value_len && !floating; i++) {
+			for (enum ewmh_atom hint = first; hint <= last; hint++) {
+				floating |= types[i] == x11.ewmh[hint];
+			}
+		}
+	}
+	free(reply);
+	return floating;
+}
+
+static void read_window_properties(struct x11_view *view) {
+	xcb_window_t id = view->id;
+	xcb_get_geometry_cookie_t geom = xcb_get_geometry(x11.connection, id);
+	xcb_get_property_cookie_t class = xcb_icccm_get_wm_class(x11.connection, id);
+	xcb_get_property_cookie_t transient = xcb_icccm_get_wm_transient_for(x11.connection, id);
+	xcb_get_property_cookie_t normal = xcb_icccm_get_wm_normal_hints(x11.connection, id);
+	xcb_get_property_cookie_t types = xcb_get_property(x11.connection, false, id,
+		x11.ewmh[NET_WM_WINDOW_TYPE], XCB_ATOM_ATOM, 0, 32);
+	xcb_get_property_cookie_t states = xcb_get_property(x11.connection, false, id,
+		x11.ewmh[NET_WM_STATE], XCB_ATOM_ATOM, 0, 32);
+	xcb_get_geometry_reply_t *geometry = xcb_get_geometry_reply(x11.connection, geom, NULL);
+	if (geometry) {
+		view->natural_width = geometry->width;
+		view->natural_height = geometry->height;
+		free(geometry);
+	}
+	xcb_icccm_get_wm_class_reply_t wm_class;
+	if (xcb_icccm_get_wm_class_reply(x11.connection, class, &wm_class, NULL)) {
+		view->app_id = strdup(wm_class.class_name);
+		xcb_icccm_get_wm_class_reply_wipe(&wm_class);
+	}
+	xcb_window_t parent;
+	bool has_parent = xcb_icccm_get_wm_transient_for_reply(x11.connection, transient,
+		&parent, NULL) && parent != XCB_NONE && parent != id;
+	xcb_size_hints_t hints;
+	uint32_t size_flags = XCB_ICCCM_SIZE_HINT_P_MIN_SIZE | XCB_ICCCM_SIZE_HINT_P_MAX_SIZE;
+	bool fixed_size = xcb_icccm_get_wm_normal_hints_reply(x11.connection, normal, &hints, NULL) &&
+		(hints.flags & size_flags) == size_flags &&
+		hints.min_width > 0 && hints.min_height > 0 &&
+		hints.min_width == hints.max_width && hints.min_height == hints.max_height;
+	bool floating_type = has_atom_hint(types, NET_WM_WINDOW_TYPE_DIALOG, NET_WM_WINDOW_TYPE_TOOLBAR);
+	bool modal = has_atom_hint(states, NET_WM_STATE_MODAL, NET_WM_STATE_MODAL);
+	view->wants_float = has_parent || fixed_size || floating_type || modal;
+	if (fixed_size) {
+		view->natural_width = hints.min_width;
+		view->natural_height = hints.min_height;
+	}
+}
+
 static void manage(xcb_window_t id, bool existing) {
 	if (find_view(id)) {
 		return;
@@ -288,19 +349,7 @@ static void manage(xcb_window_t id, bool existing) {
 	}
 	view->id = id;
 	view->mapped = mapped;
-	xcb_get_geometry_cookie_t geom = xcb_get_geometry(x11.connection, id);
-	xcb_get_property_cookie_t class = xcb_icccm_get_wm_class(x11.connection, id);
-	xcb_get_geometry_reply_t *geometry = xcb_get_geometry_reply(x11.connection, geom, NULL);
-	if (geometry) {
-		view->natural_width = geometry->width;
-		view->natural_height = geometry->height;
-		free(geometry);
-	}
-	xcb_icccm_get_wm_class_reply_t wm_class;
-	if (xcb_icccm_get_wm_class_reply(x11.connection, class, &wm_class, NULL)) {
-		view->app_id = strdup(wm_class.class_name);
-		xcb_icccm_get_wm_class_reply_wipe(&wm_class);
-	}
+	read_window_properties(view);
 	view->next = x11.views;
 	x11.views = view;
 	set_wm_state(id, mapped ? XCB_ICCCM_WM_STATE_NORMAL : XCB_ICCCM_WM_STATE_ICONIC);
@@ -666,10 +715,46 @@ void wh_x11_set_border(int width, uint32_t focused, uint32_t normal) {
 	x11.normal_border = normal >> 8;
 }
 
+static void raise_view(struct x11_view *view) {
+	/* Raise within the mode's layer so a tiled parent cannot cover its dialog. */
+	xcb_window_t sibling = XCB_NONE;
+	for (struct x11_view *other = x11.views; other; other = other->next) {
+		if (other->mapped && other->mode > view->mode) {
+			sibling = other->id;
+			break;
+		}
+	}
+	if (sibling) {
+		xcb_query_tree_reply_t *tree = xcb_query_tree_reply(x11.connection,
+			xcb_query_tree(x11.connection, x11.root), NULL);
+		if (tree) {
+			/* Children are ordered bottom to top. Pick the lowest higher layer. */
+			xcb_window_t *children = xcb_query_tree_children(tree);
+			for (int i = 0; i < xcb_query_tree_children_length(tree); i++) {
+				struct x11_view *other = find_view(children[i]);
+				if (other && other->mapped && other->mode > view->mode) {
+					sibling = other->id;
+					break;
+				}
+			}
+			free(tree);
+		}
+		uint32_t values[] = {sibling, XCB_STACK_MODE_BELOW};
+		xcb_configure_window(x11.connection, view->id,
+			XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE, values);
+	} else {
+		uint32_t above = XCB_STACK_MODE_ABOVE;
+		xcb_configure_window(x11.connection, view->id, XCB_CONFIG_WINDOW_STACK_MODE, &above);
+	}
+}
+
 void wh_x11_set_mode(wh_view_id id, int mode) {
 	struct x11_view *view = find_view(id);
-	if (view) {
-		view->fullscreen = mode == WH_VIEW_FULLSCREEN;
+	if (view && (int)view->mode != mode) {
+		view->mode = mode;
+		if (view->mapped) {
+			raise_view(view);
+		}
 	}
 }
 
@@ -678,7 +763,7 @@ void wh_x11_set_geometry(wh_view_id id, int x, int y, int width, int height) {
 	if (!view) {
 		return;
 	}
-	int border = view->fullscreen ? 0 : x11.border_width;
+	int border = view->mode == WH_VIEW_FULLSCREEN ? 0 : x11.border_width;
 	uint32_t values[] = {x, y, width > border * 2 ? width - border * 2 : 1,
 		height > border * 2 ? height - border * 2 : 1, border};
 	xcb_configure_window(x11.connection, id, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
@@ -691,6 +776,7 @@ void wh_x11_set_visible(wh_view_id id, int visible) {
 		return;
 	}
 	if (visible) {
+		raise_view(view);
 		xcb_map_window(x11.connection, id);
 		set_wm_state(id, XCB_ICCCM_WM_STATE_NORMAL);
 	} else {
@@ -718,8 +804,7 @@ void wh_x11_focus(wh_view_id id) {
 		xcb_change_window_attributes(x11.connection, view->id, XCB_CW_BORDER_PIXEL, &pixel);
 	}
 	if (next && !x11.hover_focus) {
-		uint32_t above = XCB_STACK_MODE_ABOVE;
-		xcb_configure_window(x11.connection, id, XCB_CONFIG_WINDOW_STACK_MODE, &above);
+		raise_view(focused);
 	}
 	xcb_set_input_focus(x11.connection, XCB_INPUT_FOCUS_POINTER_ROOT,
 		next ? next : x11.root, XCB_CURRENT_TIME);
@@ -761,6 +846,11 @@ void wh_x11_close(wh_view_id id) {
 const char *wh_x11_app_id(wh_view_id id) {
 	struct x11_view *view = find_view(id);
 	return view && view->app_id ? view->app_id : "";
+}
+
+int wh_x11_wants_float(wh_view_id id) {
+	struct x11_view *view = find_view(id);
+	return view && view->wants_float;
 }
 
 int wh_x11_natural_width(wh_view_id id) {

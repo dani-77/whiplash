@@ -2331,7 +2331,7 @@ const char *wh_view_app_id(wh_view_id id) {
 
 int wh_view_wants_float(wh_view_id id) {
 	if (backend == WH_BACKEND_X11) {
-		return 0;
+		return wh_x11_wants_float(id);
 	}
 	struct wh_view *view = view_by_id(id);
 	if (!view) {

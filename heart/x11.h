@@ -26,6 +26,7 @@ void wh_x11_set_visible(wh_view_id id, int visible);
 void wh_x11_focus(wh_view_id id);
 void wh_x11_close(wh_view_id id);
 const char *wh_x11_app_id(wh_view_id id);
+int wh_x11_wants_float(wh_view_id id);
 int wh_x11_natural_width(wh_view_id id);
 int wh_x11_natural_height(wh_view_id id);
 

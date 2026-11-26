@@ -24,6 +24,7 @@ The name comes from Metallica's *Whiplash*.
 - **Up to 9 workspaces** with keyboard and bar controls.
 - **Window rules** — send an app to its own workspace every time it opens, or make it
   float (or never float), by its name.
+- **Dialogs and fixed-size windows** automatically open as floating windows.
 - **Click to focus** on both backends. Set `focus_follows_mouse = true` to focus
   windows as the pointer enters them.
 - **Scratchpads** — a drop-down terminal (or any app) that one key shows and hides,
@@ -38,8 +39,8 @@ The name comes from Metallica's *Whiplash*.
   swaps the two.
 - **Touchpad gestures** — swipe with three fingers to change workspace, or bind any
   swipe to anything a key can do. Pinch zoom and other gestures still reach your apps.
-- **Floating windows** — dialogs float on their own; hold the modifier and drag any
-  window with the left button to move it, or with the right button to resize it.
+- **Mouse dragging** — hold the modifier and drag a window with the left button
+  to move it, or with the right button to resize it.
 - **Fullscreen requests from applications** for videos, games and presentations.
 - **Touchpad that just works** — tap to click, tap and drag, and no stray clicks while
   you type, all on by default and adjustable in the config.
@@ -57,8 +58,8 @@ The name comes from Metallica's *Whiplash*.
 - **Runs your existing Linux apps**, X11 ones included, through XWayland.
 
 The X11 backend currently manages one X screen. ATG can switch workspaces and show
-the active workspace. Per-monitor work areas, automatic dialog floating and mouse
-dragging are still pending on X11.
+the active workspace. Per-monitor work areas and mouse dragging are still pending
+on X11.
 
 ## Installing
 

@@ -129,6 +129,13 @@ Haskell and refreshes the grabs on keymap changes and TOML reload.
   client in the `StackSet`. A client withdrawal or destruction invokes the shared
   unmap callback. Shutdown remaps hidden clients and removes the root properties
   published by Whiplash.
+- **Floating hints and stacking.** On map, the backend reads `WM_TRANSIENT_FOR`,
+  the client size hints, the modal state and `_NET_WM_WINDOW_TYPE`. Transients,
+  modal windows, dialogs, utility windows, splash screens, toolbars and windows
+  with equal positive minimum and maximum dimensions request floating placement.
+  The shared Haskell code centers them and gives an explicit TOML `float` rule
+  priority. The X11 backend raises windows within their layer, so floating dialogs
+  stay above tiled windows and fullscreen windows stay above both.
 - **Click focus.** Unfocused clients have passive grabs for buttons 1–3. A press is
   routed to the shared click callback. `ReplayPointer` then delivers the original
   click to the application. Wheel events and clicks on override-redirect surfaces
@@ -366,6 +373,6 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
 ## Not done yet
 
 - Animations, rounded corners, blur.
-- Native X11 per-monitor work areas, mouse dragging, automatic dialog floating,
-  client fullscreen requests, and occupied and urgent hints for the ATG bar.
+- Native X11 per-monitor work areas, mouse dragging, client fullscreen requests,
+  and occupied and urgent hints for the ATG bar.
 - D77 ISO integration for the two sessions.

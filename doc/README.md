@@ -69,7 +69,8 @@ sudo make install
 Only GHC boot packages are used (`base`, `containers`, `mtl`, `directory`), so the build
 needs no network. That's also what `xbps-src` and similar package builders require.
 The C side links against wlroots-0.20, wayland-server, xkbcommon, libinput, xcb,
-xcb-icccm and xcb-xinput through `pkgconfig-depends` in `whiplash.cabal`.
+xcb-icccm, xcb-randr and xcb-xinput through `pkgconfig-depends` in
+`whiplash.cabal`.
 
 `build/whiplash` only rebuilds when a source file is newer than it, so `make && sudo
 make install` never runs cabal as root.
@@ -122,6 +123,13 @@ the display. The XCB fd uses the shared event loop alongside inotify and shutdow
 signals. The X server supplies the keymap. The backend grabs the keys registered by
 Haskell and refreshes the grabs on keymap changes and TOML reload.
 
+- **Monitors.** The backend reads active RandR 1.5 monitors and reports their
+  names, full rectangles and usable rectangles through the shared output
+  interface. Identical rectangles share a single workspace for mirrored outputs.
+  Monitor indices follow the same left-to-right, then top-to-bottom order as
+  Wayland. RandR notifications and root configure events refresh the layout.
+  Servers without RandR 1.5 or active monitor objects use the X screen
+  rectangle. Configure native X11 displays with `xrandr` or an equivalent tool.
 - **Workspaces and work area.** The C backend maps Haskell workspace tags to
   zero-based EWMH desktops. It publishes the workspace count, names, current desktop
   and work areas. A `_NET_CURRENT_DESKTOP` client message becomes the same workspace
@@ -129,11 +137,13 @@ Haskell and refreshes the grabs on keymap changes and TOML reload.
   changes.
   Docks stay out of the window set and can reserve any edge through
   `_NET_WM_STRUT_PARTIAL` or its legacy equivalent `_NET_WM_STRUT`. The backend
-  uses the largest reservation on each edge and recalculates the rectangle on
+  applies partial struts only to monitors they intersect and recalculates the
+  available space on
   map, unmap, strut updates and root resizes. An explicitly set
-  `WHIPLASH_X11_RESERVE_TOP` is a minimum inset at the top. Haskell tiling and
-  `_NET_WORKAREA` share the usable rectangle. Docks stack above regular clients and below fullscreen clients,
-  which use the full rectangle. Both rectangles describe one X screen today.
+  `WHIPLASH_X11_RESERVE_TOP` sets a minimum reservation measured from the top
+  of the root window. Haskell uses the per-monitor areas for tiling.
+  EWMH publishes a desktop-wide `_NET_WORKAREA` rectangle for each workspace.
+  Docks stack above regular clients and below fullscreen clients.
 - **Workspace occupancy.** The shared Haskell core counts windows in each
   `StackSet` workspace. On native X11 the backend publishes these counts as
   `_D77_WORKSPACE_COUNTS` (`CARDINAL[]/32`) on the root window, in EWMH desktop
@@ -165,7 +175,7 @@ Haskell and refreshes the grabs on keymap changes and TOML reload.
   that hint at map time and via `_NET_WM_STATE` messages. Application requests and
   keybindings use the same fullscreen state in Haskell. X11 updates the fullscreen
   atom while preserving the other atoms in the window property. A fullscreen
-  window uses the whole screen without borders, including the space reserved for
+  window uses the whole monitor without borders, including the space reserved for
   the bar. On exit it returns to its tile or floating rectangle.
 - **Click focus.** Unfocused clients have passive grabs for buttons 1–3. A press is
   routed to the shared click callback. `ReplayPointer` then delivers the original
@@ -426,5 +436,4 @@ digits stay digits on layouts such as `pt`, where they're shifted symbols.
 ## Not done yet
 
 - Animations, rounded corners, blur.
-- Native X11 per-monitor work areas.
 - D77 ISO integration for the two sessions.

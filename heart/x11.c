@@ -14,6 +14,7 @@
 #include <wayland-server-core.h>
 #include <xcb/xcb.h>
 #include <xcb/xcb_icccm.h>
+#include <xcb/randr.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 struct x11_view {
@@ -36,6 +37,12 @@ struct x11_workspace {
 
 struct x11_rect {
 	int x, y, width, height;
+};
+
+struct x11_output {
+	struct x11_rect full;
+	xcb_atom_t atom;
+	char *name;
 };
 
 enum x11_edge { EDGE_LEFT, EDGE_RIGHT, EDGE_TOP, EDGE_BOTTOM, EDGE_COUNT };
@@ -102,6 +109,9 @@ static struct {
 	uint32_t workspace_count, published_count, current_desktop;
 	bool workspace_counts_dirty, workspace_urgency_dirty;
 	int width, height, reserve_top;
+	uint8_t randr_event;
+	struct x11_output *outputs;
+	int output_count;
 	int border_width;
 	uint32_t focused_border, normal_border;
 } x11;
@@ -166,29 +176,45 @@ static void set_root_cardinals(enum ewmh_atom property, uint32_t count, const ui
 		x11.ewmh[property], XCB_ATOM_CARDINAL, 32, count, values);
 }
 
-static int edge_inset(uint32_t edge, int size) {
-	return edge < (uint32_t)size ? (int)edge : size - 1;
+static bool same_rect(struct x11_rect a, struct x11_rect b) {
+	return a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
 }
 
-static struct x11_rect usable_rect(void) {
+static struct x11_rect root_rect(void) {
+	return (struct x11_rect){0, 0, x11.width, x11.height};
+}
+
+static int edge_inset(uint32_t edge, int offset, int size) {
+	uint32_t start = offset > 0 ? (uint32_t)offset : 0;
+	if (edge <= start) {
+		return 0;
+	}
+	uint32_t inset = edge - start;
+	return inset < (uint32_t)size ? (int)inset : size - 1;
+}
+
+static struct x11_rect usable_rect(struct x11_rect full) {
 	uint32_t edges[EDGE_COUNT] = {[EDGE_TOP] = x11.reserve_top};
 	for (const struct x11_dock *dock = x11.docks; dock; dock = dock->next) {
 		for (int edge = 0; edge < EDGE_COUNT; edge++) {
-			uint32_t limit = edge < EDGE_TOP ? x11.height : x11.width;
-			uint32_t start = dock->strut[4 + 2 * edge];
-			uint32_t end = dock->strut[5 + 2 * edge];
-			if ((!dock->partial || (start < limit && end >= start)) &&
-					dock->strut[edge] > edges[edge]) {
+			if (dock->strut[edge] <= edges[edge]) {
+				continue;
+			}
+			/* Partial struts specify inclusive spans along the root window edge. */
+			int begin = edge < EDGE_TOP ? full.y : full.x;
+			int end = begin + (edge < EDGE_TOP ? full.height : full.width);
+			uint32_t first = dock->strut[4 + 2 * edge];
+			uint32_t last = dock->strut[5 + 2 * edge];
+			if (!dock->partial || (first <= last && (int64_t)first < end && (int64_t)last >= begin)) {
 				edges[edge] = dock->strut[edge];
 			}
 		}
 	}
-	int left = edge_inset(edges[EDGE_LEFT], x11.width);
-	int top = edge_inset(edges[EDGE_TOP], x11.height);
-	int width = x11.width - left, height = x11.height - top;
-	width -= edge_inset(edges[EDGE_RIGHT], width);
-	height -= edge_inset(edges[EDGE_BOTTOM], height);
-	return (struct x11_rect){left, top, width, height};
+	int left = edge_inset(edges[EDGE_LEFT], full.x, full.width);
+	int top = edge_inset(edges[EDGE_TOP], full.y, full.height);
+	int right = edge_inset(edges[EDGE_RIGHT], x11.width - full.x - full.width, full.width - left);
+	int bottom = edge_inset(edges[EDGE_BOTTOM], x11.height - full.y - full.height, full.height - top);
+	return (struct x11_rect){full.x + left, full.y + top, full.width - left - right, full.height - top - bottom};
 }
 
 static int read_reserve_top(void) {
@@ -218,7 +244,7 @@ static void publish_desktop_geometry(void) {
 		return;
 	}
 	set_root_cardinals(NET_DESKTOP_VIEWPORT, 2 * count, rects);
-	const struct x11_rect usable = usable_rect();
+	const struct x11_rect usable = usable_rect(root_rect());
 	for (uint32_t i = 0; i < count; i++) {
 		rects[4 * i] = usable.x;
 		rects[4 * i + 1] = usable.y;
@@ -236,10 +262,114 @@ static void notify_outputs_changed(void) {
 	}
 }
 
-static void notify_workarea_changed(struct x11_rect previous) {
-	struct x11_rect current = usable_rect();
-	if (current.x != previous.x || current.y != previous.y ||
-			current.width != previous.width || current.height != previous.height) {
+static void free_outputs(struct x11_output *outputs, int count) {
+	for (int i = 0; i < count; i++) {
+		free(outputs[i].name);
+	}
+	free(outputs);
+}
+
+static int output_order(const void *first, const void *second) {
+	const struct x11_output *a = first, *b = second;
+	if (a->full.x != b->full.x) {
+		return a->full.x - b->full.x;
+	}
+	if (a->full.y != b->full.y) {
+		return a->full.y - b->full.y;
+	}
+	return (a->atom > b->atom) - (a->atom < b->atom);
+}
+
+static char *output_name(xcb_atom_t atom) {
+	xcb_get_atom_name_reply_t *reply = xcb_get_atom_name_reply(x11.connection,
+		xcb_get_atom_name(x11.connection, atom), NULL);
+	char *name = reply ? strndup(xcb_get_atom_name_name(reply), xcb_get_atom_name_name_length(reply)) : NULL;
+	free(reply);
+	return name;
+}
+
+static bool update_monitors(void) {
+	xcb_randr_get_monitors_reply_t *reply = xcb_randr_get_monitors_reply(x11.connection,
+		xcb_randr_get_monitors(x11.connection, x11.root, true), NULL);
+	if (!reply) {
+		return false;
+	}
+	xcb_randr_monitor_info_iterator_t it = xcb_randr_get_monitors_monitors_iterator(reply);
+	struct x11_output *outputs = it.rem ? calloc(it.rem, sizeof(*outputs)) : NULL;
+	if (it.rem && !outputs) {
+		free(reply);
+		return false;
+	}
+	int count = 0;
+	for (; it.rem; xcb_randr_monitor_info_next(&it)) {
+		const xcb_randr_monitor_info_t *m = it.data;
+		if (!m->width || !m->height) {
+			continue;
+		}
+		struct x11_rect full = {m->x, m->y, m->width, m->height};
+		int i = 0;
+		while (i < count && !same_rect(outputs[i].full, full)) {
+			i++;
+		}
+		if (i == count) {
+			outputs[count++] = (struct x11_output){.full = full, .atom = m->name};
+		}
+	}
+	free(reply);
+	if (count > 1) {
+		qsort(outputs, count, sizeof(*outputs), output_order);
+	}
+	bool changed = count != x11.output_count;
+	for (int i = 0; !changed && i < count; i++) {
+		changed = outputs[i].atom != x11.outputs[i].atom || !same_rect(outputs[i].full, x11.outputs[i].full);
+	}
+	if (!changed) {
+		free(outputs);
+		return false;
+	}
+	for (int i = 0; i < count; i++) {
+		outputs[i].name = output_name(outputs[i].atom);
+	}
+	free_outputs(x11.outputs, x11.output_count);
+	x11.outputs = outputs;
+	x11.output_count = count;
+	return true;
+}
+
+static void init_randr(void) {
+	const xcb_query_extension_reply_t *ext = xcb_get_extension_data(x11.connection, &xcb_randr_id);
+	if (!ext || !ext->present) {
+		return;
+	}
+	xcb_randr_query_version_reply_t *version = xcb_randr_query_version_reply(x11.connection,
+		xcb_randr_query_version(x11.connection, 1, 5), NULL);
+	bool supported = version && (version->major_version > 1 || version->minor_version >= 5);
+	free(version);
+	if (!supported) {
+		return;
+	}
+	const uint16_t mask = XCB_RANDR_NOTIFY_MASK_SCREEN_CHANGE | XCB_RANDR_NOTIFY_MASK_CRTC_CHANGE |
+		XCB_RANDR_NOTIFY_MASK_OUTPUT_CHANGE | XCB_RANDR_NOTIFY_MASK_RESOURCE_CHANGE;
+	xcb_generic_error_t *error = xcb_request_check(x11.connection,
+		xcb_randr_select_input_checked(x11.connection, x11.root, mask));
+	if (!error) {
+		x11.randr_event = ext->first_event;
+		update_monitors();
+	}
+	free(error);
+}
+
+static void refresh_outputs(void) {
+	struct x11_rect previous = root_rect();
+	xcb_get_geometry_reply_t *geometry = xcb_get_geometry_reply(x11.connection,
+		xcb_get_geometry(x11.connection, x11.root), NULL);
+	if (geometry) {
+		x11.width = geometry->width;
+		x11.height = geometry->height;
+	}
+	free(geometry);
+	bool changed = x11.randr_event && update_monitors();
+	if (changed || !same_rect(previous, root_rect())) {
 		notify_outputs_changed();
 	}
 }
@@ -473,13 +603,17 @@ static bool read_strut(xcb_window_t id, enum ewmh_atom atom, uint32_t *values, u
 }
 
 static void update_dock_strut(struct x11_dock *dock) {
-	struct x11_rect previous = usable_rect();
+	uint32_t previous[12];
+	memcpy(previous, dock->strut, sizeof(previous));
+	bool was_partial = dock->partial;
 	memset(dock->strut, 0, sizeof(dock->strut));
 	dock->partial = read_strut(dock->id, NET_WM_STRUT_PARTIAL, dock->strut, 12);
 	if (!dock->partial) {
 		read_strut(dock->id, NET_WM_STRUT, dock->strut, 4);
 	}
-	notify_workarea_changed(previous);
+	if (was_partial != dock->partial || memcmp(previous, dock->strut, sizeof(previous))) {
+		notify_outputs_changed();
+	}
 }
 
 static void map_dock(xcb_window_t id, bool mapped) {
@@ -505,11 +639,10 @@ static void remove_dock(xcb_window_t id) {
 		link = &(*link)->next;
 	}
 	if (*link) {
-		struct x11_rect previous = usable_rect();
 		struct x11_dock *dock = *link;
 		*link = dock->next;
 		free(dock);
-		notify_workarea_changed(previous);
+		notify_outputs_changed();
 	}
 }
 
@@ -905,7 +1038,13 @@ static void end_drag(const xcb_button_release_event_t *button) {
 }
 
 static void dispatch(xcb_generic_event_t *event) {
-	switch (event->response_type & 0x7f) {
+	uint8_t type = event->response_type & 0x7f;
+	if (x11.randr_event && (type == x11.randr_event + XCB_RANDR_SCREEN_CHANGE_NOTIFY ||
+			type == x11.randr_event + XCB_RANDR_NOTIFY)) {
+		refresh_outputs();
+		return;
+	}
+	switch (type) {
 	case XCB_GE_GENERIC:
 		wh_x11_input_event((const void *)event);
 		break;
@@ -946,11 +1085,9 @@ static void dispatch(xcb_generic_event_t *event) {
 		break;
 	case XCB_CONFIGURE_NOTIFY: {
 		xcb_configure_notify_event_t *configure = (void *)event;
-		if (configure->window == x11.root &&
-				(configure->width != x11.width || configure->height != x11.height)) {
-			x11.width = configure->width;
-			x11.height = configure->height;
-			notify_outputs_changed();
+		/* RandR monitor objects can change while the root keeps its size. */
+		if (configure->window == x11.root) {
+			refresh_outputs();
 		}
 		break;
 	}
@@ -1103,6 +1240,7 @@ int wh_x11_init(struct wl_display *display, struct wh_x11_callbacks callbacks) {
 	/* A synchronous XCB reply can already have pulled events off the fd. */
 	wl_event_source_check(x11.events);
 	wh_x11_input_init(x11.connection, x11.root, callbacks.swipe);
+	init_randr();
 	x11.first_keycode = setup->min_keycode;
 	x11.last_keycode = setup->max_keycode;
 	update_keymap();
@@ -1156,21 +1294,33 @@ void wh_x11_shutdown(void) {
 	}
 	free(x11.keymap);
 	free(x11.bindings);
+	free_outputs(x11.outputs, x11.output_count);
 	/* Wait for the server to apply property cleanup and remap hidden clients
 	 * before closing the connection. */
 	free(xcb_get_input_focus_reply(x11.connection, xcb_get_input_focus(x11.connection), NULL));
 	xcb_disconnect(x11.connection);
 }
 
+int wh_x11_output_count(void) {
+	return x11.output_count ? x11.output_count : 1;
+}
+
+const char *wh_x11_output_name(int index) {
+	if (index < 0 || index >= wh_x11_output_count()) {
+		return NULL;
+	}
+	return x11.output_count && x11.outputs[index].name ? x11.outputs[index].name : "X11";
+}
+
 int wh_x11_output_info(int index, int *out) {
-	if (index != 0) {
+	if (index < 0 || index >= wh_x11_output_count()) {
 		return -1;
 	}
-	int rect[] = {0, 0, x11.width, x11.height};
-	memcpy(out, rect, sizeof(rect));
-	const struct x11_rect workarea = usable_rect();
-	int usable[] = {workarea.x, workarea.y, workarea.width, workarea.height};
-	memcpy(out + 4, usable, sizeof(usable));
+	const struct x11_rect full = x11.output_count ? x11.outputs[index].full : root_rect();
+	const struct x11_rect workarea = usable_rect(full);
+	int rects[] = {full.x, full.y, full.width, full.height,
+		workarea.x, workarea.y, workarea.width, workarea.height};
+	memcpy(out, rects, sizeof(rects));
 	return 0;
 }
 

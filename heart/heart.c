@@ -1171,7 +1171,7 @@ static int sorted_outputs(struct wh_output **out, int max) {
 
 int wh_output_count(void) {
 	if (backend == WH_BACKEND_X11) {
-		return 1;
+		return wh_x11_output_count();
 	}
 	struct wh_output *outs[16];
 	return sorted_outputs(outs, 16);
@@ -1195,7 +1195,7 @@ int wh_output_info(int i, int *out) {
 
 const char *wh_output_name(int i) {
 	if (backend == WH_BACKEND_X11) {
-		return i == 0 ? "X11" : NULL;
+		return wh_x11_output_name(i);
 	}
 	struct wh_output *outs[16];
 	int n = sorted_outputs(outs, 16);

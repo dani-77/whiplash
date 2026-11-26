@@ -22,6 +22,8 @@ The name comes from Metallica's *Whiplash*.
   gaps and autostart. Save it to reload settings and bindings. Whiplash keeps the last
   working config if a save contains an error.
 - **Up to 9 workspaces** with keyboard and bar controls.
+- **Multiple monitors** — each monitor shows its own workspace. Selecting a
+  workspace already visible on another monitor swaps the two.
 - **Window rules** — send an app to its own workspace every time it opens, or make it
   float (or never float), by its name.
 - **Dialogs and fixed-size windows** automatically open as floating windows.
@@ -44,8 +46,6 @@ The name comes from Metallica's *Whiplash*.
 
 ### Wayland features
 
-- **Multiple monitors** — asking for a workspace that's showing on another screen
-  swaps the two.
 - **Workspaces in your bar** — bars that support Wayland's standard workspace protocol
   show and switch whiplash's workspaces with no extra setup, and see which one holds a
   window asking for your attention.
@@ -59,13 +59,14 @@ The name comes from Metallica's *Whiplash*.
   wdisplays, and warm the colors at night with wlsunset or gammastep.
 - **Runs your existing Linux apps**, X11 ones included, through XWayland.
 
-The X11 backend currently manages one X screen. ATG can switch workspaces and show
-the active workspace. With the Whiplash workspace hints, ATG also dims empty inactive
-workspaces and marks urgent workspaces in red. Per-monitor work areas are still
-pending on X11.
+On X11, Whiplash detects monitors through RandR 1.5. Use `xrandr` to configure
+their layout. ATG can switch workspaces and show the active workspace. With the
+Whiplash workspace hints, ATG also dims empty inactive workspaces and marks
+urgent workspaces in red.
 
 X11 docks can reserve space for panels using EWMH struts. The available tiling
-area follows the reservation as the panel appears, changes or closes.
+area of each affected monitor follows the reservation as the panel appears,
+changes or closes.
 
 ## Installing
 
@@ -183,8 +184,8 @@ just a line in `config.toml`, so rebind anything to anything.
 | `Mod` + `1`-`9` | Switch to workspace 1-9 |
 | `Mod` + `Shift` + `1`-`9` | Move the focused window to workspace 1-9 |
 | `Mod` + `Tab` | Back to the previous workspace |
-| `Mod` + `,` / `.` | Focus the previous / next monitor (Wayland, example config) |
-| `Mod` + `Shift` + `,` / `.` | Move the focused window to the previous / next monitor (Wayland, example config) |
+| `Mod` + `,` / `.` | Focus the previous / next monitor (example config) |
+| `Mod` + `Shift` + `,` / `.` | Move the focused window to the previous / next monitor (example config) |
 | `Mod` + left drag | Float and move a window |
 | `Mod` + right drag | Float and resize a window |
 | `Mod` + `Shift` + `C` | Close the focused window |

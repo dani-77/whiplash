@@ -25,6 +25,8 @@ void wh_x11_set_active_workspace(int tag);
 void wh_x11_set_workspace_urgent(int tag, int enabled);
 void wh_x11_set_workspace_counts(const int *pairs, unsigned count);
 int wh_x11_output_info(int index, int *out);
+int wh_x11_output_count(void);
+const char *wh_x11_output_name(int index);
 void wh_x11_set_border(int width, uint32_t focused, uint32_t normal);
 void wh_x11_set_mode(wh_view_id id, int mode);
 void wh_x11_set_geometry(wh_view_id id, int x, int y, int width, int height);

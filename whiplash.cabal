@@ -51,6 +51,7 @@ library
     , xkbcommon
     , xcb
     , xcb-icccm
+    , xcb-randr
     , xcb-xinput
 
 executable whiplash

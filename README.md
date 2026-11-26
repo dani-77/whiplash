@@ -64,6 +64,9 @@ the active workspace. With the Whiplash workspace hints, ATG also dims empty ina
 workspaces and marks urgent workspaces in red. Per-monitor work areas are still
 pending on X11.
 
+X11 docks can reserve space for panels using EWMH struts. The available tiling
+area follows the reservation as the panel appears, changes or closes.
+
 ## Installing
 
 To build this branch, install GHC and Cabal along with the development packages
@@ -115,8 +118,10 @@ system ATG configuration and `qs` are available, the script starts ATG via
 `-s 'QT_QPA_PLATFORM=xcb qs -n -d -c atg'` and reserves 48 pixels at the top.
 Edit the session script to change this automatic launch. Set
 `WHIPLASH_X11_RESERVE_TOP` in the session environment to choose a different
-reservation. The launch command lives in the script and the rest of your
-autostart list lives in `config.toml`.
+minimum top reservation for bars such as ATG that supply no EWMH strut.
+An EWMH top reservation and this value combine by taking the larger one.
+The launch command lives in the script and the rest of your autostart list
+lives in `config.toml`.
 
 Utumno on Wayland is started by the built-in autostart or your TOML autostart.
 If you launch the X11 binary directly, you can still select your own startup

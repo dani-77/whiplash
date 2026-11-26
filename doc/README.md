@@ -123,8 +123,13 @@ Haskell and refreshes the grabs on keymap changes and TOML reload.
   and work areas. A `_NET_CURRENT_DESKTOP` client message becomes the same workspace
   action that a keybinding invokes. ATG listens for the resulting root-property
   changes. ATG's override-redirect bar uses the top reservation set in the wrapper.
-  The reservation affects the usable rectangle for tiling and `_NET_WORKAREA`.
-  Fullscreen uses the full rectangle. Both rectangles describe one X screen today.
+  Docks stay out of the window set and can reserve any edge through
+  `_NET_WM_STRUT_PARTIAL` or its legacy equivalent `_NET_WM_STRUT`. The backend
+  uses the largest reservation on each edge and recalculates the rectangle on
+  map, unmap, strut updates and root resizes. The wrapper reservation is a
+  minimum inset at the top. Haskell tiling and `_NET_WORKAREA` share the usable
+  rectangle. Docks stack above regular clients and below fullscreen clients,
+  which use the full rectangle. Both rectangles describe one X screen today.
 - **Workspace occupancy.** The shared Haskell core counts windows in each
   `StackSet` workspace. On native X11 the backend publishes these counts as
   `_D77_WORKSPACE_COUNTS` (`CARDINAL[]/32`) on the root window, in EWMH desktop

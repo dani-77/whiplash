@@ -38,6 +38,16 @@ struct x11_rect {
 	int x, y, width, height;
 };
 
+enum x11_edge { EDGE_LEFT, EDGE_RIGHT, EDGE_TOP, EDGE_BOTTOM, EDGE_COUNT };
+enum x11_stack_layer { LAYER_TILED, LAYER_FLOATING, LAYER_DOCK, LAYER_FULLSCREEN };
+
+struct x11_dock {
+	struct x11_dock *next;
+	xcb_window_t id;
+	uint32_t strut[12];
+	bool partial;
+};
+
 struct x11_drag {
 	wh_view_id id;
 	uint8_t button;
@@ -50,8 +60,9 @@ enum ewmh_atom {
 	NET_SUPPORTED, NET_SUPPORTING_WM_CHECK, NET_NUMBER_OF_DESKTOPS,
 	NET_CURRENT_DESKTOP, NET_DESKTOP_NAMES, NET_DESKTOP_GEOMETRY,
 	NET_DESKTOP_VIEWPORT, NET_WORKAREA, NET_WM_NAME,
-	NET_WM_STATE, NET_WM_STATE_FULLSCREEN, NET_WM_STATE_DEMANDS_ATTENTION, UTF8_STRING,
-	NET_WM_WINDOW_TYPE, NET_WM_WINDOW_TYPE_DIALOG, NET_WM_WINDOW_TYPE_UTILITY,
+	NET_WM_STATE, NET_WM_STATE_FULLSCREEN, NET_WM_STATE_DEMANDS_ATTENTION,
+	NET_WM_STRUT, NET_WM_STRUT_PARTIAL, NET_WM_WINDOW_TYPE, NET_WM_WINDOW_TYPE_DOCK,
+	UTF8_STRING, NET_WM_WINDOW_TYPE_DIALOG, NET_WM_WINDOW_TYPE_UTILITY,
 	NET_WM_WINDOW_TYPE_SPLASH, NET_WM_WINDOW_TYPE_TOOLBAR,
 	NET_WM_STATE_MODAL, D77_WORKSPACE_COUNTS, D77_WORKSPACE_URGENT, EWMH_COUNT,
 };
@@ -60,8 +71,9 @@ static const char *const ewmh_names[] = {
 	"_NET_SUPPORTED", "_NET_SUPPORTING_WM_CHECK", "_NET_NUMBER_OF_DESKTOPS",
 	"_NET_CURRENT_DESKTOP", "_NET_DESKTOP_NAMES", "_NET_DESKTOP_GEOMETRY",
 	"_NET_DESKTOP_VIEWPORT", "_NET_WORKAREA", "_NET_WM_NAME",
-	"_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN", "_NET_WM_STATE_DEMANDS_ATTENTION", "UTF8_STRING",
-	"_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DIALOG", "_NET_WM_WINDOW_TYPE_UTILITY",
+	"_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN", "_NET_WM_STATE_DEMANDS_ATTENTION",
+	"_NET_WM_STRUT", "_NET_WM_STRUT_PARTIAL", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DOCK",
+	"UTF8_STRING", "_NET_WM_WINDOW_TYPE_DIALOG", "_NET_WM_WINDOW_TYPE_UTILITY",
 	"_NET_WM_WINDOW_TYPE_SPLASH", "_NET_WM_WINDOW_TYPE_TOOLBAR",
 	"_NET_WM_STATE_MODAL", "_D77_WORKSPACE_COUNTS", "_D77_WORKSPACE_URGENT",
 };
@@ -73,6 +85,7 @@ static struct {
 	struct wl_event_source *events;
 	struct wh_x11_callbacks callbacks;
 	struct x11_view *views;
+	struct x11_dock *docks;
 	wh_view_id focused, hovered;
 	struct x11_drag drag;
 	bool focus_follows_mouse, hover_focus;
@@ -92,6 +105,8 @@ static struct {
 	int border_width;
 	uint32_t focused_border, normal_border;
 } x11;
+
+static void raise_in_layer(xcb_window_t id, enum x11_stack_layer layer);
 
 static struct x11_view *find_view(wh_view_id id) {
 	for (struct x11_view *view = x11.views; view; view = view->next) {
@@ -151,8 +166,29 @@ static void set_root_cardinals(enum ewmh_atom property, uint32_t count, const ui
 		x11.ewmh[property], XCB_ATOM_CARDINAL, 32, count, values);
 }
 
-static int usable_top(void) {
-	return x11.reserve_top < x11.height ? x11.reserve_top : x11.height - 1;
+static int edge_inset(uint32_t edge, int size) {
+	return edge < (uint32_t)size ? (int)edge : size - 1;
+}
+
+static struct x11_rect usable_rect(void) {
+	uint32_t edges[EDGE_COUNT] = {[EDGE_TOP] = x11.reserve_top};
+	for (const struct x11_dock *dock = x11.docks; dock; dock = dock->next) {
+		for (int edge = 0; edge < EDGE_COUNT; edge++) {
+			uint32_t limit = edge < EDGE_TOP ? x11.height : x11.width;
+			uint32_t start = dock->strut[4 + 2 * edge];
+			uint32_t end = dock->strut[5 + 2 * edge];
+			if ((!dock->partial || (start < limit && end >= start)) &&
+					dock->strut[edge] > edges[edge]) {
+				edges[edge] = dock->strut[edge];
+			}
+		}
+	}
+	int left = edge_inset(edges[EDGE_LEFT], x11.width);
+	int top = edge_inset(edges[EDGE_TOP], x11.height);
+	int width = x11.width - left, height = x11.height - top;
+	width -= edge_inset(edges[EDGE_RIGHT], width);
+	height -= edge_inset(edges[EDGE_BOTTOM], height);
+	return (struct x11_rect){left, top, width, height};
 }
 
 static int read_reserve_top(void) {
@@ -182,14 +218,30 @@ static void publish_desktop_geometry(void) {
 		return;
 	}
 	set_root_cardinals(NET_DESKTOP_VIEWPORT, 2 * count, rects);
-	int top = usable_top();
+	const struct x11_rect usable = usable_rect();
 	for (uint32_t i = 0; i < count; i++) {
-		rects[4 * i + 1] = top;
-		rects[4 * i + 2] = x11.width;
-		rects[4 * i + 3] = x11.height - top;
+		rects[4 * i] = usable.x;
+		rects[4 * i + 1] = usable.y;
+		rects[4 * i + 2] = usable.width;
+		rects[4 * i + 3] = usable.height;
 	}
 	set_root_cardinals(NET_WORKAREA, 4 * count, rects);
 	free(rects);
+}
+
+static void notify_outputs_changed(void) {
+	publish_desktop_geometry();
+	if (x11.callbacks.outputs_changed) {
+		x11.callbacks.outputs_changed();
+	}
+}
+
+static void notify_workarea_changed(struct x11_rect previous) {
+	struct x11_rect current = usable_rect();
+	if (current.x != previous.x || current.y != previous.y ||
+			current.width != previous.width || current.height != previous.height) {
+		notify_outputs_changed();
+	}
 }
 
 static bool init_ewmh(void) {
@@ -399,6 +451,68 @@ static bool has_atom_hint(const xcb_get_property_reply_t *reply, enum ewmh_atom 
 	return false;
 }
 
+static struct x11_dock *find_dock(xcb_window_t id) {
+	for (struct x11_dock *dock = x11.docks; dock; dock = dock->next) {
+		if (dock->id == id) {
+			return dock;
+		}
+	}
+	return NULL;
+}
+
+static bool read_strut(xcb_window_t id, enum ewmh_atom atom, uint32_t *values, uint32_t count) {
+	xcb_get_property_reply_t *reply = xcb_get_property_reply(x11.connection,
+		xcb_get_property(x11.connection, false, id, x11.ewmh[atom], XCB_ATOM_CARDINAL, 0, count), NULL);
+	bool valid = reply && reply->type == XCB_ATOM_CARDINAL && reply->format == 32 &&
+		reply->value_len == count && !reply->bytes_after;
+	if (valid) {
+		memcpy(values, xcb_get_property_value(reply), count * sizeof(*values));
+	}
+	free(reply);
+	return valid;
+}
+
+static void update_dock_strut(struct x11_dock *dock) {
+	struct x11_rect previous = usable_rect();
+	memset(dock->strut, 0, sizeof(dock->strut));
+	dock->partial = read_strut(dock->id, NET_WM_STRUT_PARTIAL, dock->strut, 12);
+	if (!dock->partial) {
+		read_strut(dock->id, NET_WM_STRUT, dock->strut, 4);
+	}
+	notify_workarea_changed(previous);
+}
+
+static void map_dock(xcb_window_t id, bool mapped) {
+	struct x11_dock *dock = calloc(1, sizeof(*dock));
+	if (!mapped) {
+		xcb_map_window(x11.connection, id);
+	}
+	if (!dock) {
+		return;
+	}
+	dock->id = id;
+	dock->next = x11.docks;
+	x11.docks = dock;
+	uint32_t events = XCB_EVENT_MASK_PROPERTY_CHANGE;
+	xcb_change_window_attributes(x11.connection, id, XCB_CW_EVENT_MASK, &events);
+	raise_in_layer(id, LAYER_DOCK);
+	update_dock_strut(dock);
+}
+
+static void remove_dock(xcb_window_t id) {
+	struct x11_dock **link = &x11.docks;
+	while (*link && (*link)->id != id) {
+		link = &(*link)->next;
+	}
+	if (*link) {
+		struct x11_rect previous = usable_rect();
+		struct x11_dock *dock = *link;
+		*link = dock->next;
+		free(dock);
+		notify_workarea_changed(previous);
+	}
+}
+
 static void set_state_hint(struct x11_view *view, enum ewmh_atom hint, bool *current, bool enabled) {
 	if (*current == enabled) {
 		return;
@@ -443,15 +557,13 @@ static void notify_urgency_change(struct x11_view *view, bool previous) {
 	}
 }
 
-static void read_window_properties(struct x11_view *view) {
+static void read_window_properties(struct x11_view *view, const xcb_get_property_reply_t *types) {
 	xcb_window_t id = view->id;
 	xcb_get_geometry_cookie_t geom = xcb_get_geometry(x11.connection, id);
 	xcb_get_property_cookie_t class = xcb_icccm_get_wm_class(x11.connection, id);
 	xcb_get_property_cookie_t transient = xcb_icccm_get_wm_transient_for(x11.connection, id);
 	xcb_get_property_cookie_t normal = xcb_icccm_get_wm_normal_hints(x11.connection, id);
 	xcb_get_property_cookie_t hints_cookie = xcb_icccm_get_wm_hints(x11.connection, id);
-	xcb_get_property_cookie_t types = xcb_get_property(x11.connection, false, id,
-		x11.ewmh[NET_WM_WINDOW_TYPE], XCB_ATOM_ATOM, 0, 32);
 	xcb_get_property_cookie_t states = xcb_get_property(x11.connection, false, id,
 		x11.ewmh[NET_WM_STATE], XCB_ATOM_ATOM, 0, UINT32_MAX);
 	xcb_get_geometry_reply_t *geometry = xcb_get_geometry_reply(x11.connection, geom, NULL);
@@ -475,15 +587,13 @@ static void read_window_properties(struct x11_view *view) {
 		hints.min_width > 0 && hints.min_height > 0 &&
 		hints.min_width == hints.max_width && hints.min_height == hints.max_height;
 	view->urgency_hint = read_urgency_hint(hints_cookie);
-	xcb_get_property_reply_t *type_reply = xcb_get_property_reply(x11.connection, types, NULL);
 	xcb_get_property_reply_t *state_reply = xcb_get_property_reply(x11.connection, states, NULL);
-	bool floating_type = has_atom_hint(type_reply, NET_WM_WINDOW_TYPE_DIALOG, NET_WM_WINDOW_TYPE_TOOLBAR);
+	bool floating_type = has_atom_hint(types, NET_WM_WINDOW_TYPE_DIALOG, NET_WM_WINDOW_TYPE_TOOLBAR);
 	bool modal = has_atom_hint(state_reply, NET_WM_STATE_MODAL, NET_WM_STATE_MODAL);
 	view->fullscreen_hint = has_atom_hint(state_reply, NET_WM_STATE_FULLSCREEN, NET_WM_STATE_FULLSCREEN);
 	view->demands_attention = has_atom_hint(state_reply, NET_WM_STATE_DEMANDS_ATTENTION,
 		NET_WM_STATE_DEMANDS_ATTENTION);
 	view->wants_float = has_parent || fixed_size || floating_type || modal;
-	free(type_reply);
 	free(state_reply);
 	if (fixed_size) {
 		view->natural_width = hints.min_width;
@@ -492,7 +602,7 @@ static void read_window_properties(struct x11_view *view) {
 }
 
 static void manage(xcb_window_t id, bool existing) {
-	if (find_view(id)) {
+	if (find_view(id) || find_dock(id)) {
 		return;
 	}
 	xcb_get_window_attributes_reply_t *attr = xcb_get_window_attributes_reply(
@@ -501,9 +611,25 @@ static void manage(xcb_window_t id, bool existing) {
 		return;
 	}
 	bool mapped = attr->map_state == XCB_MAP_STATE_VIEWABLE;
-	bool normal = !attr->override_redirect && attr->_class == XCB_WINDOW_CLASS_INPUT_OUTPUT;
+	bool override = attr->override_redirect;
+	bool input_output = attr->_class == XCB_WINDOW_CLASS_INPUT_OUTPUT;
 	free(attr);
-	if (!normal || (existing && !mapped)) {
+	if (!input_output || (existing && !mapped)) {
+		if (!existing) {
+			xcb_map_window(x11.connection, id);
+		}
+		return;
+	}
+	xcb_get_property_reply_t *types = xcb_get_property_reply(x11.connection,
+		xcb_get_property(x11.connection, false, id, x11.ewmh[NET_WM_WINDOW_TYPE],
+			XCB_ATOM_ATOM, 0, 32), NULL);
+	if (has_atom_hint(types, NET_WM_WINDOW_TYPE_DOCK, NET_WM_WINDOW_TYPE_DOCK)) {
+		free(types);
+		map_dock(id, mapped);
+		return;
+	}
+	if (override) {
+		free(types);
 		if (!existing) {
 			xcb_map_window(x11.connection, id);
 		}
@@ -511,12 +637,14 @@ static void manage(xcb_window_t id, bool existing) {
 	}
 	struct x11_view *view = calloc(1, sizeof(*view));
 	if (!view) {
+		free(types);
 		xcb_map_window(x11.connection, id);
 		return;
 	}
 	view->id = id;
 	view->mapped = mapped;
-	read_window_properties(view);
+	read_window_properties(view, types);
+	free(types);
 	view->next = x11.views;
 	x11.views = view;
 	set_wm_state(id, mapped ? XCB_ICCCM_WM_STATE_NORMAL : XCB_ICCCM_WM_STATE_ICONIC);
@@ -784,8 +912,18 @@ static void dispatch(xcb_generic_event_t *event) {
 	case XCB_MAP_REQUEST:
 		manage(((xcb_map_request_event_t *)event)->window, false);
 		break;
+	case XCB_MAP_NOTIFY: {
+		const xcb_map_notify_event_t *map = (const void *)event;
+		if (map->event == x11.root && map->override_redirect) {
+			manage(map->window, true);
+		}
+		break;
+	}
 	case XCB_UNMAP_NOTIFY: {
 		xcb_unmap_notify_event_t *unmap = (void *)event;
+		if (unmap->event == x11.root) {
+			remove_dock(unmap->window);
+		}
 		struct x11_view *view = find_view(unmap->window);
 		if (view && unmap->event == x11.root) {
 			/* A synthetic ICCCM withdrawal counts even for a hidden client. */
@@ -797,9 +935,12 @@ static void dispatch(xcb_generic_event_t *event) {
 		}
 		break;
 	}
-	case XCB_DESTROY_NOTIFY:
-		unmanage(((xcb_destroy_notify_event_t *)event)->window, true);
+	case XCB_DESTROY_NOTIFY: {
+		xcb_window_t id = ((xcb_destroy_notify_event_t *)event)->window;
+		remove_dock(id);
+		unmanage(id, true);
 		break;
+	}
 	case XCB_CONFIGURE_REQUEST:
 		configure_request((void *)event);
 		break;
@@ -809,10 +950,7 @@ static void dispatch(xcb_generic_event_t *event) {
 				(configure->width != x11.width || configure->height != x11.height)) {
 			x11.width = configure->width;
 			x11.height = configure->height;
-			publish_desktop_geometry();
-			if (x11.callbacks.outputs_changed) {
-				x11.callbacks.outputs_changed();
-			}
+			notify_outputs_changed();
 		}
 		break;
 	}
@@ -832,6 +970,12 @@ static void dispatch(xcb_generic_event_t *event) {
 	}
 	case XCB_PROPERTY_NOTIFY: {
 		xcb_property_notify_event_t *property = (void *)event;
+		if (property->atom == x11.ewmh[NET_WM_STRUT] || property->atom == x11.ewmh[NET_WM_STRUT_PARTIAL]) {
+			struct x11_dock *dock = find_dock(property->window);
+			if (dock) {
+				update_dock_strut(dock);
+			}
+		}
 		struct x11_view *view = property->atom == XCB_ATOM_WM_HINTS ? find_view(property->window) : NULL;
 		if (view) {
 			bool previous = view_is_urgent(view);
@@ -1005,6 +1149,11 @@ void wh_x11_shutdown(void) {
 		free(view->app_id);
 		free(view);
 	}
+	while (x11.docks) {
+		struct x11_dock *dock = x11.docks;
+		x11.docks = dock->next;
+		free(dock);
+	}
 	free(x11.keymap);
 	free(x11.bindings);
 	/* Wait for the server to apply property cleanup and remap hidden clients
@@ -1019,8 +1168,8 @@ int wh_x11_output_info(int index, int *out) {
 	}
 	int rect[] = {0, 0, x11.width, x11.height};
 	memcpy(out, rect, sizeof(rect));
-	int top = usable_top();
-	int usable[] = {0, top, x11.width, x11.height - top};
+	const struct x11_rect workarea = usable_rect();
+	int usable[] = {workarea.x, workarea.y, workarea.width, workarea.height};
 	memcpy(out + 4, usable, sizeof(usable));
 	return 0;
 }
@@ -1031,11 +1180,16 @@ void wh_x11_set_border(int width, uint32_t focused, uint32_t normal) {
 	x11.normal_border = normal >> 8;
 }
 
-static void raise_view(struct x11_view *view) {
-	/* Raise within the mode's layer so a tiled parent cannot cover its dialog. */
-	xcb_window_t sibling = XCB_NONE;
+static enum x11_stack_layer view_layer(const struct x11_view *view) {
+	return view->mode == WH_VIEW_FULLSCREEN ? LAYER_FULLSCREEN :
+		view->mode == WH_VIEW_FLOATING ? LAYER_FLOATING : LAYER_TILED;
+}
+
+static void raise_in_layer(xcb_window_t id, enum x11_stack_layer layer) {
+	/* Keep docks above ordinary windows and below fullscreen clients. */
+	xcb_window_t sibling = layer < LAYER_DOCK && x11.docks ? x11.docks->id : XCB_NONE;
 	for (struct x11_view *other = x11.views; other; other = other->next) {
-		if (other->mapped && other->mode > view->mode) {
+		if (other->mapped && view_layer(other) > layer) {
 			sibling = other->id;
 			break;
 		}
@@ -1048,20 +1202,25 @@ static void raise_view(struct x11_view *view) {
 			xcb_window_t *children = xcb_query_tree_children(tree);
 			for (int i = 0; i < xcb_query_tree_children_length(tree); i++) {
 				struct x11_view *other = find_view(children[i]);
-				if (other && other->mapped && other->mode > view->mode) {
-					sibling = other->id;
+				if ((other && other->mapped && view_layer(other) > layer) ||
+						(layer < LAYER_DOCK && find_dock(children[i]))) {
+					sibling = children[i];
 					break;
 				}
 			}
 			free(tree);
 		}
 		uint32_t values[] = {sibling, XCB_STACK_MODE_BELOW};
-		xcb_configure_window(x11.connection, view->id,
+		xcb_configure_window(x11.connection, id,
 			XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE, values);
 	} else {
 		uint32_t above = XCB_STACK_MODE_ABOVE;
-		xcb_configure_window(x11.connection, view->id, XCB_CONFIG_WINDOW_STACK_MODE, &above);
+		xcb_configure_window(x11.connection, id, XCB_CONFIG_WINDOW_STACK_MODE, &above);
 	}
+}
+
+static void raise_view(struct x11_view *view) {
+	raise_in_layer(view->id, view_layer(view));
 }
 
 void wh_x11_set_mode(wh_view_id id, int mode) {

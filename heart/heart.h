@@ -29,6 +29,8 @@ enum wh_swipe_direction {
 	WH_SWIPE_LEFT, WH_SWIPE_RIGHT, WH_SWIPE_UP, WH_SWIPE_DOWN,
 };
 typedef int (*wh_swipe_cb)(int fingers, int direction);
+/* Minimum travel in roughly pixels before a swipe triggers a binding. */
+#define WH_SWIPE_MIN 50.0
 typedef void (*wh_view_state_cb)(wh_view_id id, int on);
 typedef void (*wh_view_rect_cb)(wh_view_id id, int x, int y, int width, int height);
 typedef void (*wh_workspace_cb)(int tag);
@@ -47,6 +49,7 @@ void wh_on_view_clicked(wh_view_cb cb);
 void wh_on_view_entered(wh_view_cb cb);
 void wh_on_key(wh_key_cb cb);
 void wh_on_swipe(wh_swipe_cb cb);
+void wh_set_swipes_enabled(int enabled);
 /* Outputs appeared, went away, or changed size, scale or bars: query
  * them with wh_output_count/wh_output_info. */
 void wh_on_outputs_changed(wh_void_cb cb);

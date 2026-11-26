@@ -180,6 +180,11 @@ Haskell and refreshes the grabs on keymap changes and TOML reload.
   on reload and when a device is added or enabled. Default acceleration profiles
   and click methods come from the driver. Settings for unsupported properties are
   skipped.
+- **Touchpad swipes.** The X11 input module negotiates XI 2.4 and installs a
+  synchronous passive swipe grab on the root window while `[gestures]` contains
+  bindings. It replays swipes with unbound finger counts and thaws the device
+  for swipes it consumes. Pinch events follow Xorg's normal delivery rules.
+  Earlier XI 2 versions still provide the touchpad settings.
 
 ## Testing without touching your session
 
@@ -300,13 +305,13 @@ Bindings merge by parsed modifier mask and keysym. `Run.hs` keeps the running
 workspace tags when replacing the config, so changing the workspace count needs
 a session restart.
 
-Touchpad gestures: at `swipe_begin` the heart asks the brain (`wh_on_swipe` with
-`WH_SWIPE_QUERY`) whether any `[gestures]` entry uses that many fingers. If so the
-swipe is the compositor's: deltas are summed, and at `swipe_end` the dominant axis
-picks the direction, ignoring cancelled swipes and ones shorter than `WH_SWIPE_MIN`.
-Otherwise the whole swipe, like every pinch and hold, is forwarded to clients through
-pointer-gestures-v1. Gestures can't be driven headless; the config parsing and the
-`workspace-next`/`workspace-prev` actions can.
+Both backends ask the brain at the start of a swipe whether `[gestures]` uses
+that finger count (`wh_on_swipe` with `WH_SWIPE_QUERY`). If it does, the heart
+adds the motion deltas and uses the dominant axis at the end of the gesture.
+Cancelled swipes and swipes shorter than `WH_SWIPE_MIN` trigger no binding.
+Wayland sends unbound swipes, pinches and holds through pointer-gestures-v1.
+An isolated Xorg server with the `inputtest` driver's `PointerGesture` device
+can exercise both workspace bindings and delivery to X11 clients.
 
 Floating windows belong to their workspace, not to a screen. Their rects are kept in
 layout coordinates, and every `refresh` starts with `relocateFloats`: a float whose

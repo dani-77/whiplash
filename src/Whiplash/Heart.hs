@@ -12,6 +12,7 @@ module Whiplash.Heart
   , onViewEntered
   , onKey
   , onSwipe
+  , setSwipesEnabled
   , onOutputsChanged
   , outputs
   , setOutputRules
@@ -127,6 +128,7 @@ foreign import ccall unsafe "wh_set_keyboard" c_set_keyboard
   :: CString -> CString -> CString -> CInt -> CInt -> IO ()
 foreign import ccall unsafe "wh_set_touchpad" c_set_touchpad
   :: CInt -> CInt -> CInt -> CInt -> CInt -> CDouble -> CInt -> CInt -> IO ()
+foreign import ccall unsafe "wh_set_swipes_enabled" c_set_swipes_enabled :: CInt -> IO ()
 foreign import ccall unsafe "wh_keysym_from_name" c_keysym_from_name :: CString -> IO Word32
 foreign import ccall unsafe "wh_watch_config" c_watch_config :: CString -> CString -> IO CInt
 foreign import ccall unsafe "wh_set_backend" c_set_backend :: CInt -> IO ()
@@ -292,6 +294,10 @@ setTouchpad tap drag dragLock natural dwt speed profile click =
     (realToFrac speed) (fromIntegral profile) (fromIntegral click)
   where
     flag b = if b then 1 else 0
+
+-- | Install X11's swipe grab only while there are gesture bindings.
+setSwipesEnabled :: Bool -> IO ()
+setSwipesEnabled enabled = c_set_swipes_enabled (if enabled then 1 else 0)
 
 -- | Look a key name up in xkbcommon ("Return", "XF86AudioMute", ...).
 keysymFromName :: String -> IO (Maybe Word32)

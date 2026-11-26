@@ -1011,10 +1011,6 @@ static void server_cursor_frame(struct wl_listener *listener, void *data) {
 
 /* ---- touchpad gestures -------------------------------------------------- */
 
-/* A swipe shorter than this (in libinput's unaccelerated units, roughly
- * pixels) is a slip of the fingers, not a gesture. */
-#define WH_SWIPE_MIN 50.0
-
 static void swipe_begin(struct wl_listener *listener, void *data) {
 	struct wlr_pointer_swipe_begin_event *event = data;
 	notify_activity();
@@ -2578,6 +2574,7 @@ static int start_x11(void) {
 		.grab = cb_view_grab,
 		.moved = cb_view_moved,
 		.key = cb_key,
+		.swipe = cb_swipe,
 		.outputs_changed = cb_outputs_changed,
 		.workspace_activate = cb_workspace_activate,
 	};
@@ -2588,6 +2585,12 @@ static int start_x11(void) {
 	}
 	watch_stop_signals();
 	return 0;
+}
+
+void wh_set_swipes_enabled(int enabled) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_input_set_swipes_enabled(enabled != 0);
+	}
 }
 
 int wh_init(void) {

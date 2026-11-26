@@ -10,6 +10,7 @@ struct wh_x11_callbacks {
 	wh_view_state_cb fullscreen, urgent;
 	wh_view_rect_cb grab, moved;
 	wh_key_cb key;
+	wh_swipe_cb swipe;
 	wh_void_cb outputs_changed;
 	wh_workspace_cb workspace_activate;
 };

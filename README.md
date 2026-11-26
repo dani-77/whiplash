@@ -32,6 +32,10 @@ The name comes from Metallica's *Whiplash*.
 - **Touchpad settings** — tap to click, tap and drag, natural scrolling and
   disable while typing. X11 applies the settings exposed by the Xorg libinput
   driver on each touchpad.
+- **Touchpad swipes** — use `[gestures]` to bind swipes to the same actions as
+  keyboard shortcuts. On X11 this requires XInput 2.4 and a gesture-capable
+  touchpad driver. Pinch zoom and swipes with an unbound finger count still
+  reach applications.
 - **Scratchpads** — a drop-down terminal (or any app) that one key shows and hides,
   without closing it, wherever you are.
 - **Fullscreen** from a shortcut or at the application's request.
@@ -42,8 +46,6 @@ The name comes from Metallica's *Whiplash*.
 
 - **Multiple monitors** — asking for a workspace that's showing on another screen
   swaps the two.
-- **Touchpad gestures** — swipe with three fingers to change workspace, or bind any
-  swipe to anything a key can do. Pinch zoom and other gestures still reach your apps.
 - **Workspaces in your bar** — bars that support Wayland's standard workspace protocol
   show and switch whiplash's workspaces with no extra setup, and see which one holds a
   window asking for your attention.

@@ -61,7 +61,9 @@ applyToHeart :: H.Backend -> Config -> IO ()
 applyToHeart backend cfg = do
   H.setBorder (borderWidth cfg) (focusedBorderColor cfg) (normalBorderColor cfg)
   H.setMouseMod (modMask cfg)
-  when (backend == H.X11) (H.setFocusFollowsMouse (focusFollowsMouse cfg))
+  when (backend == H.X11) $ do
+    H.setFocusFollowsMouse (focusFollowsMouse cfg)
+    H.setSwipesEnabled (not (null (gestures cfg)))
   when (backend == H.Wayland) $ do
     H.setOutputRules (outputRules cfg)
     let kb = keyboard cfg

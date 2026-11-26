@@ -958,7 +958,7 @@ int wh_x11_init(struct wl_display *display, struct wh_x11_callbacks callbacks) {
 	}
 	/* A synchronous XCB reply can already have pulled events off the fd. */
 	wl_event_source_check(x11.events);
-	wh_x11_input_init(x11.connection, x11.root);
+	wh_x11_input_init(x11.connection, x11.root, callbacks.swipe);
 	x11.first_keycode = setup->min_keycode;
 	x11.last_keycode = setup->max_keycode;
 	update_keymap();

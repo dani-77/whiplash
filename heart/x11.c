@@ -30,6 +30,17 @@ struct x11_workspace {
 	char *name;
 };
 
+struct x11_rect {
+	int x, y, width, height;
+};
+
+struct x11_drag {
+	wh_view_id id;
+	uint8_t button;
+	int pointer_x, pointer_y;
+	struct x11_rect start;
+};
+
 /* All atoms before NET_WM_NAME are properties owned on the root window. */
 enum ewmh_atom {
 	NET_SUPPORTED, NET_SUPPORTING_WM_CHECK, NET_NUMBER_OF_DESKTOPS,
@@ -59,10 +70,12 @@ static struct {
 	struct wh_x11_callbacks callbacks;
 	struct x11_view *views;
 	wh_view_id focused, hovered;
+	struct x11_drag drag;
 	bool focus_follows_mouse, hover_focus;
 	xcb_get_keyboard_mapping_reply_t *keymap;
 	uint8_t first_keycode, last_keycode;
 	uint16_t lock_mask;
+	uint32_t mouse_mod;
 	uint32_t *bindings;
 	unsigned binding_count;
 	xcb_atom_t wm_state, wm_protocols, wm_delete_window;
@@ -94,7 +107,7 @@ static wh_view_id view_under_pointer(void) {
 }
 
 static void pointer_crossed(const xcb_enter_notify_event_t *event, bool entered) {
-	if (!x11.focus_follows_mouse || event->mode != XCB_NOTIFY_MODE_NORMAL ||
+	if (!x11.focus_follows_mouse || x11.drag.id || event->mode != XCB_NOTIFY_MODE_NORMAL ||
 			event->detail == XCB_NOTIFY_DETAIL_INFERIOR) {
 		return;
 	}
@@ -272,6 +285,42 @@ static void ungrab_focus_clicks(xcb_window_t id) {
 	}
 }
 
+static void grab_drag_buttons(void) {
+	xcb_ungrab_button(x11.connection, XCB_BUTTON_INDEX_ANY, x11.root, XCB_MOD_MASK_ANY);
+	if (x11.mouse_mod) {
+		for (uint16_t locks = x11.lock_mask;; locks = (locks - 1) & x11.lock_mask) {
+			const uint8_t buttons[] = {XCB_BUTTON_INDEX_1, XCB_BUTTON_INDEX_3};
+			const uint16_t events = XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE |
+				XCB_EVENT_MASK_POINTER_MOTION;
+			for (size_t i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
+				xcb_grab_button(x11.connection, false, x11.root, events,
+					XCB_GRAB_MODE_SYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE,
+					buttons[i], (x11.mouse_mod & ~x11.lock_mask) | locks);
+			}
+			if (!locks) {
+				break;
+			}
+		}
+	}
+	xcb_flush(x11.connection);
+}
+
+void wh_x11_set_mouse_mod(uint32_t mods) {
+	if (x11.mouse_mod != mods) {
+		x11.mouse_mod = mods;
+		if (x11.connection) {
+			grab_drag_buttons();
+		}
+	}
+}
+
+static void cancel_drag(wh_view_id id) {
+	if (x11.drag.id == id) {
+		x11.drag.id = XCB_NONE;
+		xcb_ungrab_pointer(x11.connection, XCB_CURRENT_TIME);
+	}
+}
+
 static bool is_atom_list(const xcb_get_property_reply_t *reply) {
 	return reply && reply->type == XCB_ATOM_ATOM && reply->format == 32;
 }
@@ -412,6 +461,7 @@ static void unmanage(xcb_window_t id, bool destroyed) {
 	if (!view) {
 		return;
 	}
+	cancel_drag(id);
 	*link = view->next;
 	if (id == x11.focused) {
 		x11.focused = XCB_NONE;
@@ -486,6 +536,7 @@ static void update_keymap(void) {
 		free(map);
 	}
 	grab_keys();
+	grab_drag_buttons();
 }
 
 void wh_x11_set_bindings(const uint32_t *pairs, unsigned count) {
@@ -563,6 +614,76 @@ static void fullscreen_request(const xcb_client_message_event_t *message) {
 	x11.callbacks.fullscreen(view->id, fullscreen);
 }
 
+static void configure_view(const struct x11_view *view, struct x11_rect rect);
+
+static bool begin_drag(const xcb_button_press_event_t *button) {
+	struct x11_view *view = find_view(button->child);
+	if (!view || !view->mapped || view->mode == WH_VIEW_FULLSCREEN || !x11.callbacks.grab) {
+		return false;
+	}
+	xcb_get_geometry_reply_t *geometry = xcb_get_geometry_reply(x11.connection,
+		xcb_get_geometry(x11.connection, view->id), NULL);
+	if (!geometry) {
+		return false;
+	}
+	struct x11_rect start = {
+		geometry->x, geometry->y,
+		geometry->width + 2 * geometry->border_width,
+		geometry->height + 2 * geometry->border_width,
+	};
+	free(geometry);
+	x11.callbacks.grab(view->id, start.x, start.y, start.width, start.height);
+	if (view->mode != WH_VIEW_FLOATING) {
+		return false;
+	}
+	x11.drag = (struct x11_drag){
+		.id = view->id,
+		.button = button->detail,
+		.pointer_x = button->root_x,
+		.pointer_y = button->root_y,
+		.start = start,
+	};
+	return true;
+}
+
+static int clamp(int value, int min, int max) {
+	return value < min ? min : value > max ? max : value;
+}
+
+static struct x11_rect drag_geometry(int root_x, int root_y) {
+	struct x11_rect rect = x11.drag.start;
+	int dx = root_x - x11.drag.pointer_x;
+	int dy = root_y - x11.drag.pointer_y;
+	if (x11.drag.button == XCB_BUTTON_INDEX_1) {
+		rect.x = clamp(rect.x + dx, INT16_MIN, INT16_MAX);
+		rect.y = clamp(rect.y + dy, INT16_MIN, INT16_MAX);
+	} else {
+		rect.width = clamp(rect.width + dx, 64, UINT16_MAX);
+		rect.height = clamp(rect.height + dy, 48, UINT16_MAX);
+	}
+	return rect;
+}
+
+static void drag_motion(int root_x, int root_y) {
+	struct x11_view *view = find_view(x11.drag.id);
+	if (view) {
+		configure_view(view, drag_geometry(root_x, root_y));
+	}
+}
+
+static void end_drag(const xcb_button_release_event_t *button) {
+	wh_view_id id = x11.drag.id;
+	if (!id || button->detail != x11.drag.button) {
+		return;
+	}
+	struct x11_rect rect = drag_geometry(button->root_x, button->root_y);
+	drag_motion(button->root_x, button->root_y);
+	cancel_drag(id);
+	if (x11.callbacks.moved) {
+		x11.callbacks.moved(id, rect.x, rect.y, rect.width, rect.height);
+	}
+}
+
 static void dispatch(xcb_generic_event_t *event) {
 	switch (event->response_type & 0x7f) {
 	case XCB_MAP_REQUEST:
@@ -623,12 +744,29 @@ static void dispatch(xcb_generic_event_t *event) {
 	}
 	case XCB_BUTTON_PRESS: {
 		xcb_button_press_event_t *button = (void *)event;
+		if (x11.drag.id) {
+			break;
+		}
+		if (button->event == x11.root && begin_drag(button)) {
+			xcb_allow_events(x11.connection, XCB_ALLOW_ASYNC_POINTER, button->time);
+			break;
+		}
 		struct x11_view *view = find_view(button->event);
 		if (view && view->mapped && x11.callbacks.clicked) {
 			x11.callbacks.clicked(view->id);
 		}
 		/* Deliver the original click to the application after focusing it. */
 		xcb_allow_events(x11.connection, XCB_ALLOW_REPLAY_POINTER, button->time);
+		break;
+	}
+	case XCB_BUTTON_RELEASE:
+		end_drag((void *)event);
+		break;
+	case XCB_MOTION_NOTIFY: {
+		xcb_motion_notify_event_t *motion = (void *)event;
+		if (x11.drag.id) {
+			drag_motion(motion->root_x, motion->root_y);
+		}
 		break;
 	}
 	case XCB_ENTER_NOTIFY:
@@ -824,6 +962,9 @@ void wh_x11_set_mode(wh_view_id id, int mode) {
 	}
 	set_fullscreen_hint(view, mode == WH_VIEW_FULLSCREEN);
 	if ((int)view->mode != mode) {
+		if (mode != WH_VIEW_FLOATING) {
+			cancel_drag(id);
+		}
 		view->mode = mode;
 		if (view->mapped) {
 			raise_view(view);
@@ -831,16 +972,19 @@ void wh_x11_set_mode(wh_view_id id, int mode) {
 	}
 }
 
+static void configure_view(const struct x11_view *view, struct x11_rect rect) {
+	int border = view->mode == WH_VIEW_FULLSCREEN ? 0 : x11.border_width;
+	uint32_t values[] = {rect.x, rect.y, rect.width > border * 2 ? rect.width - border * 2 : 1,
+		rect.height > border * 2 ? rect.height - border * 2 : 1, border};
+	xcb_configure_window(x11.connection, view->id, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
+		XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT | XCB_CONFIG_WINDOW_BORDER_WIDTH, values);
+}
+
 void wh_x11_set_geometry(wh_view_id id, int x, int y, int width, int height) {
 	struct x11_view *view = find_view(id);
-	if (!view) {
-		return;
+	if (view && x11.drag.id != id) {
+		configure_view(view, (struct x11_rect){x, y, width, height});
 	}
-	int border = view->mode == WH_VIEW_FULLSCREEN ? 0 : x11.border_width;
-	uint32_t values[] = {x, y, width > border * 2 ? width - border * 2 : 1,
-		height > border * 2 ? height - border * 2 : 1, border};
-	xcb_configure_window(x11.connection, id, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
-		XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT | XCB_CONFIG_WINDOW_BORDER_WIDTH, values);
 }
 
 void wh_x11_set_visible(wh_view_id id, int visible) {
@@ -853,6 +997,7 @@ void wh_x11_set_visible(wh_view_id id, int visible) {
 		xcb_map_window(x11.connection, id);
 		set_wm_state(id, XCB_ICCCM_WM_STATE_NORMAL);
 	} else {
+		cancel_drag(id);
 		view->pending_unmaps++;
 		xcb_unmap_window(x11.connection, id);
 		set_wm_state(id, XCB_ICCCM_WM_STATE_ICONIC);

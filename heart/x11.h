@@ -8,6 +8,7 @@ struct wl_display;
 struct wh_x11_callbacks {
 	wh_view_cb mapped, unmapped, clicked, entered;
 	wh_view_state_cb fullscreen;
+	wh_view_rect_cb grab, moved;
 	wh_key_cb key;
 	wh_void_cb outputs_changed;
 	wh_workspace_cb workspace_activate;
@@ -17,6 +18,7 @@ int wh_x11_init(struct wl_display *display, struct wh_x11_callbacks callbacks);
 void wh_x11_shutdown(void);
 void wh_x11_set_bindings(const uint32_t *pairs, unsigned count);
 void wh_x11_set_focus_follows_mouse(int enabled);
+void wh_x11_set_mouse_mod(uint32_t mods);
 void wh_x11_add_workspace(int tag, const char *name);
 void wh_x11_set_active_workspace(int tag);
 int wh_x11_output_info(int index, int *out);

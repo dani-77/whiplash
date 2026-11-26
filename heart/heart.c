@@ -2378,6 +2378,10 @@ int wh_view_natural_height(wh_view_id id) {
 }
 
 void wh_set_mouse_mod(uint32_t mods) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_set_mouse_mod(mods);
+		return;
+	}
 	server.mouse_mod = mods;
 }
 
@@ -2553,6 +2557,8 @@ static int start_x11(void) {
 		.clicked = cb_view_clicked,
 		.entered = cb_view_entered,
 		.fullscreen = cb_view_fullscreen,
+		.grab = cb_view_grab,
+		.moved = cb_view_moved,
 		.key = cb_key,
 		.outputs_changed = cb_outputs_changed,
 		.workspace_activate = cb_workspace_activate,

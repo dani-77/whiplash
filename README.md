@@ -25,6 +25,8 @@ The name comes from Metallica's *Whiplash*.
 - **Window rules** — send an app to its own workspace every time it opens, or make it
   float (or never float), by its name.
 - **Dialogs and fixed-size windows** automatically open as floating windows.
+- **Mouse dragging** — hold `Mod` and drag with the left button to move a window
+  or with the right button to resize it. Dragging a tiled window makes it float.
 - **Click to focus** on both backends. Set `focus_follows_mouse = true` to focus
   windows as the pointer enters them.
 - **Scratchpads** — a drop-down terminal (or any app) that one key shows and hides,
@@ -39,8 +41,6 @@ The name comes from Metallica's *Whiplash*.
   swaps the two.
 - **Touchpad gestures** — swipe with three fingers to change workspace, or bind any
   swipe to anything a key can do. Pinch zoom and other gestures still reach your apps.
-- **Mouse dragging** — hold the modifier and drag a window with the left button
-  to move it, or with the right button to resize it.
 - **Touchpad that just works** — tap to click, tap and drag, and no stray clicks while
   you type, all on by default and adjustable in the config.
 - **Workspaces in your bar** — bars that support Wayland's standard workspace protocol
@@ -57,8 +57,7 @@ The name comes from Metallica's *Whiplash*.
 - **Runs your existing Linux apps**, X11 ones included, through XWayland.
 
 The X11 backend currently manages one X screen. ATG can switch workspaces and show
-the active workspace. Per-monitor work areas and mouse dragging are still pending
-on X11.
+the active workspace. Per-monitor work areas are still pending on X11.
 
 ## Installing
 
@@ -176,8 +175,8 @@ just a line in `config.toml`, so rebind anything to anything.
 | `Mod` + `Tab` | Back to the previous workspace |
 | `Mod` + `,` / `.` | Focus the previous / next monitor (Wayland, example config) |
 | `Mod` + `Shift` + `,` / `.` | Move the focused window to the previous / next monitor (Wayland, example config) |
-| `Mod` + left drag | Move a window (Wayland) |
-| `Mod` + right drag | Resize a window (Wayland) |
+| `Mod` + left drag | Float and move a window |
+| `Mod` + right drag | Float and resize a window |
 | `Mod` + `Shift` + `C` | Close the focused window |
 | `Mod` + `Shift` + `R` | Reload the config (example config) |
 | `Mod` + `Shift` + `Q` | Quit whiplash (ends the session) |

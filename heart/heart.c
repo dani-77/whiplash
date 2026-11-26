@@ -71,6 +71,7 @@
 
 #include "heart.h"
 #include "x11.h"
+#include "x11-input.h"
 
 /* Scene stacking order, bottom to top. Tiled windows live between the
  * layer-shell "bottom" and "top" layers, so bars draw above them. */
@@ -713,6 +714,15 @@ static void configure_pointer(struct wlr_input_device *device) {
 void wh_set_touchpad(int tap, int tap_drag, int drag_lock, int natural_scroll,
 		int disable_while_typing, double accel_speed, int accel_profile,
 		int click_method) {
+	if (backend == WH_BACKEND_X11) {
+		wh_x11_input_set_touchpad((struct wh_x11_touchpad_config){
+			.tap = tap, .drag = tap_drag, .drag_lock = drag_lock,
+			.natural_scroll = natural_scroll, .disable_while_typing = disable_while_typing,
+			.speed = accel_speed < -1 ? -1 : accel_speed > 1 ? 1 : accel_speed,
+			.accel_profile = accel_profile, .click_method = click_method,
+		});
+		return;
+	}
 	touchpad_cfg.tap = tap;
 	touchpad_cfg.tap_drag = tap_drag;
 	touchpad_cfg.drag_lock = drag_lock;

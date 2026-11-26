@@ -17,6 +17,7 @@ window-management decisions. Native X11 uses the same interface.
 heart/heart.c   Shared C entry points and wlroots support derived from tinywl (CC0).
 heart/x11.c     Native X11 backend using XCB. Applies layout, visibility and focus.
 heart/x11.h     Interface between the shared C entry points and the XCB backend.
+heart/x11-input.c  XInput2 device properties and input events.
 heart/heart.h   The whole C <-> Haskell contract. Read this first.
 src/Whiplash/
   Heart.hs      FFI bindings to heart.h, nothing else.
@@ -67,8 +68,8 @@ sudo make install
 
 Only GHC boot packages are used (`base`, `containers`, `mtl`, `directory`), so the build
 needs no network. That's also what `xbps-src` and similar package builders require.
-The C side links against wlroots-0.20, wayland-server, xkbcommon, libinput, xcb and
-xcb-icccm through `pkgconfig-depends` in `whiplash.cabal`.
+The C side links against wlroots-0.20, wayland-server, xkbcommon, libinput, xcb,
+xcb-icccm and xcb-xinput through `pkgconfig-depends` in `whiplash.cabal`.
 
 `build/whiplash` only rebuilds when a source file is newer than it, so `make && sudo
 make install` never runs cabal as root.
@@ -173,6 +174,12 @@ Haskell and refreshes the grabs on keymap changes and TOML reload.
   calling the shared enter callback. Hover focus skips raising the window.
   Sampling the pointer after a layout change prevents the resulting crossing
   events from taking focus while the pointer is stationary.
+- **Touchpad settings.** [`x11-input.c`](../heart/x11-input.c) identifies
+  touchpads from the libinput tapping property. It applies the shared
+  `[touchpad]` settings through the properties each device exposes, at startup,
+  on reload and when a device is added or enabled. Default acceleration profiles
+  and click methods come from the driver. Settings for unsupported properties are
+  skipped.
 
 ## Testing without touching your session
 

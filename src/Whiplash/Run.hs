@@ -66,10 +66,10 @@ applyToHeart backend cfg = do
     H.setOutputRules (outputRules cfg)
     let kb = keyboard cfg
     H.setKeyboard (kbLayout kb) (kbVariant kb) (kbOptions kb) (kbRepeatRate kb) (kbRepeatDelay kb)
-    let tp = touchpad cfg
-    H.setTouchpad (tpTap tp) (tpTapDrag tp) (tpDragLock tp) (tpNaturalScroll tp)
-      (tpDisableWhileTyping tp) (tpAccelSpeed tp)
-      (fromEnum (tpAccelProfile tp)) (fromEnum (tpClickMethod tp))
+  let tp = touchpad cfg
+  H.setTouchpad (tpTap tp) (tpTapDrag tp) (tpDragLock tp) (tpNaturalScroll tp)
+    (tpDisableWhileTyping tp) (tpAccelSpeed tp)
+    (fromEnum (tpAccelProfile tp)) (fromEnum (tpClickMethod tp))
 
 -- | A new window that is not a scratchpad: window rules, the dialog
 -- guess, then into the stack.

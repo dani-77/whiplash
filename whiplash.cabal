@@ -11,6 +11,7 @@ build-type:         Simple
 extra-source-files:
   heart/heart.h
   heart/x11.h
+  heart/x11-input.h
   heart/xdg-shell-protocol.h
   heart/xdg-decoration-unstable-v1-protocol.h
   heart/wlr-layer-shell-unstable-v1-protocol.h
@@ -40,7 +41,7 @@ library
     , containers
     , directory
     , mtl
-  c-sources:        heart/heart.c heart/x11.c
+  c-sources:        heart/heart.c heart/x11.c heart/x11-input.c
   include-dirs:     heart
   cc-options:       -DWLR_USE_UNSTABLE -Wall -Wno-unused-parameter
   pkgconfig-depends:
@@ -50,6 +51,7 @@ library
     , xkbcommon
     , xcb
     , xcb-icccm
+    , xcb-xinput
 
 executable whiplash
   import:           shared

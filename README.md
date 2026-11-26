@@ -29,6 +29,9 @@ The name comes from Metallica's *Whiplash*.
   or with the right button to resize it. Dragging a tiled window makes it float.
 - **Click to focus** on both backends. Set `focus_follows_mouse = true` to focus
   windows as the pointer enters them.
+- **Touchpad settings** — tap to click, tap and drag, natural scrolling and
+  disable while typing. X11 applies the settings exposed by the Xorg libinput
+  driver on each touchpad.
 - **Scratchpads** — a drop-down terminal (or any app) that one key shows and hides,
   without closing it, wherever you are.
 - **Fullscreen** from a shortcut or at the application's request.
@@ -41,8 +44,6 @@ The name comes from Metallica's *Whiplash*.
   swaps the two.
 - **Touchpad gestures** — swipe with three fingers to change workspace, or bind any
   swipe to anything a key can do. Pinch zoom and other gestures still reach your apps.
-- **Touchpad that just works** — tap to click, tap and drag, and no stray clicks while
-  you type, all on by default and adjustable in the config.
 - **Workspaces in your bar** — bars that support Wayland's standard workspace protocol
   show and switch whiplash's workspaces with no extra setup, and see which one holds a
   window asking for your attention.

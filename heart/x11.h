@@ -6,7 +6,7 @@
 struct wl_display;
 
 struct wh_x11_callbacks {
-	wh_view_cb mapped, unmapped;
+	wh_view_cb mapped, unmapped, clicked;
 	wh_key_cb key;
 	wh_void_cb outputs_changed;
 	wh_workspace_cb workspace_activate;

@@ -2544,6 +2544,7 @@ static int start_x11(void) {
 	struct wh_x11_callbacks callbacks = {
 		.mapped = cb_view_mapped,
 		.unmapped = cb_view_unmapped,
+		.clicked = cb_view_clicked,
 		.key = cb_key,
 		.outputs_changed = cb_outputs_changed,
 		.workspace_activate = cb_workspace_activate,

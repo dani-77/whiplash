@@ -49,6 +49,7 @@ static struct {
 	struct wl_event_source *events;
 	struct wh_x11_callbacks callbacks;
 	struct x11_view *views;
+	wh_view_id focused;
 	xcb_get_keyboard_mapping_reply_t *keymap;
 	uint8_t first_keycode, last_keycode;
 	uint16_t lock_mask;
@@ -209,6 +210,22 @@ static void set_wm_state(xcb_window_t id, uint32_t state) {
 		x11.wm_state, x11.wm_state, 32, 2, values);
 }
 
+/* Intercept clicks on unfocused clients, leaving wheel events and clicks
+ * on the focused client to the application. */
+static void grab_focus_clicks(xcb_window_t id) {
+	for (uint8_t button = XCB_BUTTON_INDEX_1; button <= XCB_BUTTON_INDEX_3; button++) {
+		xcb_grab_button(x11.connection, false, id, XCB_EVENT_MASK_BUTTON_PRESS,
+			XCB_GRAB_MODE_SYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE,
+			button, XCB_MOD_MASK_ANY);
+	}
+}
+
+static void ungrab_focus_clicks(xcb_window_t id) {
+	for (uint8_t button = XCB_BUTTON_INDEX_1; button <= XCB_BUTTON_INDEX_3; button++) {
+		xcb_ungrab_button(x11.connection, button, id, XCB_MOD_MASK_ANY);
+	}
+}
+
 static void manage(xcb_window_t id, bool existing) {
 	if (find_view(id)) {
 		return;
@@ -250,6 +267,7 @@ static void manage(xcb_window_t id, bool existing) {
 	view->next = x11.views;
 	x11.views = view;
 	set_wm_state(id, mapped ? XCB_ICCCM_WM_STATE_NORMAL : XCB_ICCCM_WM_STATE_ICONIC);
+	grab_focus_clicks(id);
 	if (x11.callbacks.mapped) {
 		x11.callbacks.mapped(id);
 	}
@@ -265,9 +283,13 @@ static void unmanage(xcb_window_t id, bool destroyed) {
 		return;
 	}
 	*link = view->next;
+	if (id == x11.focused) {
+		x11.focused = XCB_NONE;
+	}
 	free(view->app_id);
 	free(view);
 	if (!destroyed) {
+		ungrab_focus_clicks(id);
 		xcb_delete_property(x11.connection, id, x11.wm_state);
 	}
 	if (x11.callbacks.unmapped) {
@@ -438,6 +460,16 @@ static void dispatch(xcb_generic_event_t *event) {
 		if (x11.callbacks.key) {
 			x11.callbacks.key((key->state & 0xff) & ~x11.lock_mask, key_symbol(key->detail));
 		}
+		break;
+	}
+	case XCB_BUTTON_PRESS: {
+		xcb_button_press_event_t *button = (void *)event;
+		struct x11_view *view = find_view(button->event);
+		if (view && view->mapped && x11.callbacks.clicked) {
+			x11.callbacks.clicked(view->id);
+		}
+		/* Deliver the original click to the application after focusing it. */
+		xcb_allow_events(x11.connection, XCB_ALLOW_REPLAY_POINTER, button->time);
 		break;
 	}
 	case XCB_MAPPING_NOTIFY: {
@@ -624,12 +656,22 @@ void wh_x11_set_visible(wh_view_id id, int visible) {
 
 void wh_x11_focus(wh_view_id id) {
 	struct x11_view *focused = find_view(id);
+	wh_view_id next = focused && focused->mapped ? id : XCB_NONE;
+	if (next != x11.focused) {
+		if (x11.focused) {
+			grab_focus_clicks(x11.focused);
+		}
+		if (next) {
+			ungrab_focus_clicks(next);
+		}
+		x11.focused = next;
+	}
 	for (struct x11_view *view = x11.views; view; view = view->next) {
 		uint32_t pixel = view == focused ? x11.focused_border : x11.normal_border;
 		xcb_change_window_attributes(x11.connection, view->id, XCB_CW_BORDER_PIXEL, &pixel);
 	}
 	xcb_window_t target = x11.root;
-	if (focused && focused->mapped) {
+	if (next) {
 		uint32_t above = XCB_STACK_MODE_ABOVE;
 		xcb_configure_window(x11.connection, id, XCB_CONFIG_WINDOW_STACK_MODE, &above);
 		target = id;

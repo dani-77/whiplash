@@ -352,7 +352,7 @@ xmonad, so it doesn't jump back. Dragging can't be driven headless.
 ### Occupied workspaces: `d77-workspaces-$WAYLAND_DISPLAY`
 
 ext-workspace-v1 has no "occupied" state, so the d77 compositors (whiplash, wasp,
-spitfire) publish it the same way for the d77 shells (Utumno, quickshell-d77,
+spitfire) publish it the same way for the d77 shells (Utumno, quickshell-d77 (archived in favour of Utumno),
 fabric-d77, helium-d77). The file is `$XDG_RUNTIME_DIR/d77-workspaces-$WAYLAND_DISPLAY`,
 with one line per workspace:
 

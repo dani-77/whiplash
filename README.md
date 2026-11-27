@@ -70,7 +70,7 @@ changes or closes.
 
 ## Installing
 
-To build this branch, install GHC and Cabal along with the development packages
+To build Whiplash, install GHC and Cabal along with the development packages
 for both backends.
 
 <details>
@@ -100,7 +100,7 @@ download anything.
 Then clone and install:
 
 ```sh
-git clone --branch x11 https://github.com/dani-77/whiplash.git
+git clone https://github.com/dani-77/whiplash.git
 cd whiplash
 make
 sudo make install

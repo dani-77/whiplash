@@ -33,11 +33,11 @@ The name comes from Metallica's *Whiplash*.
   windows as the pointer enters them.
 - **Touchpad settings** — tap to click, tap and drag, natural scrolling and
   disable while typing. X11 applies the settings exposed by the Xorg libinput
-  driver on each touchpad.
+  driver on each touchpad (see [Touchpad on X11](#touchpad-on-x11)).
 - **Touchpad swipes** — use `[gestures]` to bind swipes to the same actions as
-  keyboard shortcuts. On X11 this requires XInput 2.4 and a gesture-capable
-  touchpad driver. Pinch zoom and swipes with an unbound finger count still
-  reach applications.
+  keyboard shortcuts. On X11 this requires XInput 2.4 and the Xorg libinput
+  driver on the touchpad. Pinch zoom and swipes with an unbound finger count
+  still reach applications.
 - **Scratchpads** — a drop-down terminal (or any app) that one key shows and hides,
   without closing it, wherever you are.
 - **Fullscreen** from a shortcut or at the application's request.
@@ -123,6 +123,36 @@ manual inset.
 An EWMH top reservation and this value combine by taking the larger one.
 Edit the session script to change the automatic ATG launch. The rest of your
 autostart list lives in `config.toml`.
+
+### Touchpad on X11
+
+On X11, Whiplash finds touchpads through the Xorg **libinput** driver: the
+`[touchpad]` settings and `[gestures]` swipes only work on a touchpad that
+libinput drives. If `xf86-input-synaptics` is installed, its
+`70-synaptics.conf` takes over touchpads instead, and Whiplash leaves them
+alone. Check which driver you have:
+
+```sh
+xinput list-props "$(xinput list --name-only | grep -i touchpad | head -n1)" | grep -c "libinput Tapping"
+```
+
+`0` means synaptics. To hand touchpads to libinput, create
+`/etc/X11/xorg.conf.d/90-libinput-touchpad.conf` and log in again:
+
+```
+Section "InputClass"
+    Identifier "touchpads via libinput"
+    MatchIsTouchpad "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "libinput"
+    Option "Tapping" "on"
+EndSection
+```
+
+`make install` doesn't install this file because it changes the touchpad driver
+for every X11 session, not only Whiplash's. Other sessions that configure the
+touchpad with `synclient` lose those settings; `Option "Tapping" "on"` keeps tap
+to click there, since libinput leaves it off by default.
 
 Utumno on Wayland is started by the built-in autostart or your TOML autostart.
 If you launch the X11 binary directly, you can still select your own startup

@@ -34,7 +34,7 @@ app/Main.hs     Compiled-in defaults; config.toml overrides them.
 examples/       config.toml: the defaults written out, installed to
                 share/whiplash/config.toml.
 data/           whiplash-session (login wrapper), X11 and Wayland session
-                entries, whiplash-portals.conf.
+                entries and the X11 and Wayland portal profiles.
 protocols/      wlr-layer-shell and wlr-output-power-management XML.
 ```
 
@@ -105,6 +105,15 @@ lists the other services.
 ATG's EWMH panel uses the `XDG_CURRENT_DESKTOP=whiplash` session value to select
 Quickshell's `PanelWindow`. Its strut comes from the bar height and top margin.
 Earlier ATG versions can use `WHIPLASH_X11_RESERVE_TOP` as a manual fallback.
+
+The wrapper starts a private D-Bus session after setting the desktop
+environment. Both backends keep `XDG_CURRENT_DESKTOP=whiplash`.
+For X11, the wrapper clears inherited Wayland socket variables and prepends
+`/etc/xdg/whiplash-x11` to `XDG_CONFIG_DIRS`. The portal service selects the
+profile in that directory ahead of `/etc/xdg-desktop-portal/whiplash-portals.conf`.
+The X11 profile uses GTK by default and sets ScreenCast and Screenshot to
+`none`. Wayland uses the existing profile and selects `wlr` for capture.
+Portal settings in `$XDG_CONFIG_HOME` can override either session's defaults.
 
 [`Run.hs`](../src/Whiplash/Run.hs) selects the backend before loading the config.
 On X11 it clears inherited `WAYLAND_DISPLAY` and `WAYLAND_SOCKET` and sets

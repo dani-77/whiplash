@@ -9,11 +9,17 @@
 # session's log is kept as whiplash.log.old so a crash can be read after
 # logging back in.
 export XDG_CURRENT_DESKTOP=whiplash
-# The X11 login entry starts ATG when the system shell is installed.
-if [ "$#" -eq 2 ] && [ "$1" = --backend ] && [ "$2" = x11 ] &&
-    [ -r /usr/share/quickshell/atg/shell.qml ] && command -v qs >/dev/null 2>&1; then
-    export XDG_CONFIG_DIRS="/usr/share:${XDG_CONFIG_DIRS:-/etc/xdg}"
-    set -- "$@" -s 'QT_QPA_PLATFORM=xcb qs -n -d -c atg'
+if [ "$#" -ge 2 ] && [ "$1" = --backend ] && [ "$2" = x11 ]; then
+    unset WAYLAND_DISPLAY WAYLAND_SOCKET
+    export XDG_SESSION_TYPE=x11
+    # The X11 login entry starts ATG when the system shell is installed.
+    if [ "$#" -eq 2 ] && [ -r /usr/share/quickshell/atg/shell.qml ] &&
+        command -v qs >/dev/null 2>&1; then
+        export XDG_CONFIG_DIRS="/usr/share:${XDG_CONFIG_DIRS:-/etc/xdg}"
+        set -- "$@" -s 'QT_QPA_PLATFORM=xcb qs -n -d -c atg'
+    fi
+    # D-Bus activation inherits this profile before Whiplash starts.
+    export XDG_CONFIG_DIRS="/etc/xdg/whiplash-x11:${XDG_CONFIG_DIRS:-/etc/xdg}"
 fi
 logdir=${XDG_STATE_HOME:-$HOME/.local/state}/whiplash
 mkdir -p "$logdir"

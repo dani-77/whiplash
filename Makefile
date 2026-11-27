@@ -63,6 +63,7 @@ install: build/whiplash
 	install -Dm644 data/whiplash.desktop $(DESTDIR)$(PREFIX)/share/wayland-sessions/whiplash.desktop
 	install -Dm644 data/whiplash-x11.desktop $(DESTDIR)$(PREFIX)/share/xsessions/whiplash-x11.desktop
 	install -Dm644 data/whiplash-portals.conf $(DESTDIR)/etc/xdg-desktop-portal/whiplash-portals.conf
+	install -Dm644 data/whiplash-x11-portals.conf $(DESTDIR)/etc/xdg/whiplash-x11/xdg-desktop-portal/whiplash-portals.conf
 	install -Dm644 examples/config.toml $(DESTDIR)$(PREFIX)/share/whiplash/config.toml
 	for s in $(ICON_SIZES); do \
 		install -Dm644 assets/logo/whiplash-$$s.png \
@@ -75,6 +76,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/wayland-sessions/whiplash.desktop
 	rm -f $(DESTDIR)$(PREFIX)/share/xsessions/whiplash-x11.desktop
 	rm -f $(DESTDIR)/etc/xdg-desktop-portal/whiplash-portals.conf
+	rm -f $(DESTDIR)/etc/xdg/whiplash-x11/xdg-desktop-portal/whiplash-portals.conf
 	rm -f $(DESTDIR)$(PREFIX)/share/whiplash/config.toml
 	for s in $(ICON_SIZES); do \
 		rm -f $(DESTDIR)$(PREFIX)/share/icons/hicolor/$${s}x$$s/apps/whiplash.png; \

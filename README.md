@@ -158,6 +158,13 @@ Utumno on Wayland is started by the built-in autostart or your TOML autostart.
 If you launch the X11 binary directly, you can still select your own startup
 command with `-s`.
 
+### Desktop portals
+
+Both login sessions use the GTK portal for file dialogs and other desktop
+services. Wayland uses the wlroots portal for screenshots and screen sharing.
+The X11 profile leaves both capture portals disabled. X11 applications that
+capture the screen directly can still offer screen sharing.
+
 To try Wayland inside your current desktop:
 
 ```sh
